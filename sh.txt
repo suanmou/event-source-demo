@@ -1,0 +1,85 @@
+
+<build>
+    <plugins>
+        <!-- 其他插件配置 -->
+
+        <!-- 使用exec-maven-plugin执行外部脚本 -->
+        <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <version>3.0.0</version> <!-- 使用最新版本 -->
+            <executions>
+                <execution>
+                    <id>generate-resource-list</id>
+                    <phase>generate-resources</phase> <!-- 在生成资源阶段执行 -->
+                    <goals>
+                        <goal>exec</goal>
+                    </goals>
+                    <configuration>
+                        <executable>./generate-resource-list.sh</executable> <!-- 脚本路径 -->
+                        <workingDirectory>${project.basedir}</workingDirectory> <!-- 工作目录 -->
+                    </configuration>
+                </execution>
+            </executions>
+        </plugin>
+
+        <!-- 确保生成的文件被复制到目标目录中 -->
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-resources-plugin</artifactId>
+            <version>3.2.0</version> <!-- 使用最新版本 -->
+            <executions>
+                <execution>
+                    <id>copy-resource-list</id>
+                    <phase>process-resources</phase> <!-- 在处理资源阶段执行 -->
+                    <goals>
+                        <goal>copy-resources</goal>
+                    </goals>
+                    <configuration>
+                        <outputDirectory>${project.build.directory}/classes/META-INF</outputDirectory> <!-- 目标目录 -->
+                        <resources>
+                            <resource>
+                                <directory>${project.basedir}/target/generated-resources</directory> <!-- 生成文件的源目录 -->
+                                <includes>
+                                    <include>resource-list.json</include> <!-- 要复制的文件 -->
+                                </includes>
+                            </resource>
+                        </resources>
+                    </configuration>
+                </execution>
+            </executions>
+        </plugin>
+    </plugins>
+</build>
+
+
+#!/bin/bash
+
+# 指定资源目录和输出文件
+RESOURCE_DIR="src/main/resources/static"
+OUTPUT_FILE="target/generated-resources/resource-list.json"
+
+# 创建输出文件的目录（如果不存在）
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+
+# 初始化JSON数组
+echo "[" > "$OUTPUT_FILE"
+
+# 遍历资源目录并生成JSON条目
+find "$RESOURCE_DIR" -type f | while read -r FILE; do
+    # 获取相对路径（从RESOURCE_DIR开始）
+    REL_PATH="${FILE#$RESOURCE_DIR/}"
+    # 转义JSON特殊字符（这里简单处理，实际情况可能需要更复杂的转义逻辑）
+    REL_PATH=$(echo "$REL_PATH" | sed 's/[\\\/]/\\\\/g; s/"/\\\"/g')
+    # 添加JSON对象到数组中
+    echo "    {\"path\": \"$REL_PATH\"}," >> "$OUTPUT_FILE"
+done
+
+# 移除最后一个逗号并添加数组闭括号
+sed -i '$ s/,$//' "$OUTPUT_FILE"
+echo "]" >> "$OUTPUT_FILE"
+
+echo "Resource list generated at $OUTPUT_FILE"
+
+
+chmod +x generate-resource-list.sh
