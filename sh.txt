@@ -82,4 +82,55 @@ echo "]" >> "$OUTPUT_FILE"
 echo "Resource list generated at $OUTPUT_FILE"
 
 
+<!-- pom.xml -->
+<plugin>
+    <groupId>org.codehaus.mojo</groupId>
+    <artifactId>exec-maven-plugin</artifactId>
+    <version>3.1.0</version>
+    <executions>
+        <execution>
+            <phase>process-resources</phase>
+            <goals>
+                <goal>java</goal>
+            </goals>
+        </execution>
+    </executions>
+    <configuration>
+        <mainClass>com.example.util.DirectoryScanner</mainClass>
+        <arguments>
+            <argument>src/main/resources/static/files</argument>
+            <argument>target/classes/static/files.json</argument>
+        </arguments>
+    </configuration>
+</plugin>
+
+
+// src/main/java/com/example/util/DirectoryScanner.java
+public class DirectoryScanner {
+    public static void generateDirectoryJson(Path sourceDir, Path outputPath) throws IOException {
+        JsonArray tree = scanDirectory(sourceDir);
+        Files.write(outputPath, tree.toString().getBytes());
+    }
+
+    private static JsonArray scanDirectory(Path dir) throws IOException {
+        JsonArray jsonArray = new JsonArray();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (Path path : stream) {
+                JsonObject obj = new JsonObject();
+                obj.addProperty("name", path.getFileName().toString());
+                obj.addProperty("type", Files.isDirectory(path) ? "directory" : "file");
+                if (Files.isDirectory(path)) {
+                    obj.add("children", scanDirectory(path));
+                }
+                jsonArray.add(obj);
+            }
+        }
+        return jsonArray;
+    }
+}
+
+
+
+
+
 chmod +x generate-resource-list.sh
