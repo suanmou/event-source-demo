@@ -134,3 +134,73 @@ public class DirectoryScanner {
 
 
 chmod +x generate-resource-list.sh
+
+
+
+<dependency>
+    <groupId>com.fasterxml.jackson.core</groupId>
+    <artifactId>jackson-databind</artifactId>
+    <version>2.15.2</version>
+</dependency>
+
+
+<build>
+    <plugins>
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <version>1.8</version>
+            <executions>
+                <execution>
+                    <id>generate-resource-list</id>
+                    <phase>prepare-package</phase>
+                    <configuration>
+                        <target>
+                            <java classname="com.example.GenerateResourceList" fork="true">
+                                <classpath>
+                                    <path refid="maven.runtime.classpath"/>
+                                </classpath>
+                            </java>
+                        </target>
+                    </configuration>
+                    <goals>
+                        <goal>run</goal>
+                    </goals>
+                </execution>
+            </executions>
+        </plugin>
+    </plugins>
+</build>
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.core.io.support.ResourcePatternResolver;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
+public class GenerateResourceList {
+    public static void main(String[] args) {
+        try {
+            ResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
+            Resource[] resources = resolver.getResources("classpath*:*");
+            List<String> resourceNames = new ArrayList<>();
+            for (Resource resource : resources) {
+                if (resource.getFilename() != null) {
+                    resourceNames.add(resource.getFilename());
+                }
+            }
+
+            ObjectMapper objectMapper = new ObjectMapper();
+            String json = objectMapper.writeValueAsString(resourceNames);
+
+            File outputFile = new File("src/main/resources/resource_list.json");
+            objectMapper.writeValue(outputFile, resourceNames);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
