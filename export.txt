@@ -1,0 +1,197 @@
+<dependency>
+    <groupId>org.apache.poi</groupId>
+    <artifactId>poi-ooxml</artifactId>
+    <version>5.2.3</version>
+</dependency>
+
+@Service
+public class ArticleService {
+    private final ReactiveMongoTemplate mongoTemplate;
+
+    // 分页查询方法保持不变...
+
+    /**
+     * 导出全量数据流（不进行分页）
+     */
+    public Flux<Article> exportArticles(String keyword, Instant startDate, Instant endDate) {
+        Query query = buildQuery(keyword, startDate, endDate); // 复用分页查询的条件构建逻辑
+        return mongoTemplate.find(query, Article.class);
+    }
+}
+
+
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferFactory;
+import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.concurrent.atomic.AtomicReference;
+
+public class ReactivePoiExcelWriter {
+
+    public static Flux<DataBuffer> writeToFlux(
+        Flux<Article> dataFlux,
+        DataBufferFactory bufferFactory,
+        String fileName
+    ) {
+        return Flux.defer(() -> {
+            // 创建流式工作簿（每100行刷新到磁盘）
+            SXSSFWorkbook workbook = new SXSSFWorkbook(100);
+            AtomicReference<Sheet> sheetRef = new AtomicReference<>(workbook.createSheet("Articles"));
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+
+            // 创建表头
+            createHeaderRow(sheetRef.get());
+
+            return dataFlux
+                .publishOn(Schedulers.boundedElastic()) // 切换到弹性线程处理阻塞IO
+                .doOnNext(article -> writeDataRow(sheetRef.get(), article))
+                .doOnComplete(() -> {
+                    try {
+                        workbook.write(bos);
+                        workbook.close();
+                        bos.close();
+                    } catch (IOException e) {
+                        throw new RuntimeException("Excel写入失败", e);
+                    }
+                })
+                .thenMany(Flux.just(bufferFactory.wrap(bos.toByteArray())))
+                .doFinally(signal -> {
+                    try {
+                        workbook.dispose(); // 清理临时文件
+                    } catch (IOException e) {
+                        // 日志记录异常
+                    }
+                });
+        });
+    }
+
+    private static void createHeaderRow(Sheet sheet) {
+        Row headerRow = sheet.createRow(0);
+        headerRow.createCell(0).setCellValue("ID");
+        headerRow.createCell(1).setCellValue("标题");
+        headerRow.createCell(2).setCellValue("内容");
+        headerRow.createCell(3).setCellValue("创建时间");
+    }
+
+    private static void writeDataRow(Sheet sheet, Article article) {
+        Row row = sheet.createRow(sheet.getLastRowNum() + 1);
+        row.createCell(0).setCellValue(article.getId());
+        row.createCell(1).setCellValue(article.getTitle());
+        row.createCell(2).setCellValue(article.getContent());
+        row.createCell(3).setCellValue(article.getCreatedAt().toString());
+    }
+}
+
+
+
+@RestController
+@RequestMapping("/api/articles")
+public class ArticleController {
+    private final ArticleService articleService;
+
+    @GetMapping("/export")
+    public ResponseEntity<Flux<DataBuffer>> exportArticles(
+        @RequestParam(required = false) String keyword,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant start,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant end
+    ) {
+        Flux<Article> dataFlux = articleService.exportArticles(keyword, start, end);
+        String fileName = "articles_" + System.currentTimeMillis() + ".xlsx";
+
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileName + "\"")
+            .header(HttpHeaders.CONTENT_TYPE, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            .body(ReactivePoiExcelWriter.writeToFlux(
+                dataFlux,
+                new DefaultDataBufferFactory(),
+                fileName
+            ));
+    }
+}
+
+
+public static Flux<DataBuffer> writeToFlux(
+    Flux<Article> dataFlux,
+    DataBufferFactory bufferFactory,
+    String fileName,
+    BiConsumer<Sheet, Article> rowWriter // 自定义行写入逻辑
+) {
+    // 在 writeDataRow 中调用 rowWriter.accept(sheet, article)
+}
+
+
+
+@Service
+public class ArticleService {
+    private final ReactiveMongoTemplate mongoTemplate;
+
+    public ArticleService(ReactiveMongoTemplate mongoTemplate) {
+        this.mongoTemplate = mongoTemplate;
+    }
+
+    /**
+     * 分页查询文章（支持关键字和日期范围）
+     * @param keyword     搜索关键字（匹配 title 或 content）
+     * @param startDate   创建时间起始（可选）
+     * @param endDate     创建时间截止（可选）
+     * @param page        页码（从 0 开始）
+     * @param size        每页大小
+     * @return Mono<PageResult<Article>>
+     */
+    public Mono<PageResult<Article>> searchArticles(
+        String keyword, 
+        Instant startDate, 
+        Instant endDate, 
+        int page, 
+        int size
+    ) {
+        // 1. 构建动态查询条件
+        Query query = new Query();
+        
+        // 关键字搜索（title 或 content 包含关键字）
+        if (StringUtils.hasText(keyword)) {
+            Criteria keywordCriteria = new Criteria().orOperator(
+                Criteria.where("title").regex(keyword, "i"),  // 忽略大小写
+                Criteria.where("content").regex(keyword, "i")
+            );
+            query.addCriteria(keywordCriteria);
+        }
+
+        // 日期范围筛选
+        if (startDate != null || endDate != null) {
+            Criteria dateCriteria = Criteria.where("createdAt");
+            if (startDate != null) {
+                dateCriteria.gte(startDate);
+            }
+            if (endDate != null) {
+                dateCriteria.lte(endDate);
+            }
+            query.addCriteria(dateCriteria);
+        }
+
+        // 2. 计算总数
+        Mono<Long> count = mongoTemplate.count(query, Article.class);
+
+        // 3. 分页查询数据
+        Flux<Article> data = mongoTemplate.find(
+            query
+                .with(PageRequest.of(page, size))  // 分页参数
+                .sort(Sort.by(Sort.Direction.DESC, "createdAt")),  // 按时间倒序
+            Article.class
+        );
+
+        // 4. 组合结果
+        return Mono.zip(data.collectList(), count)
+            .map(tuple -> new PageResult<>(
+                tuple.getT1(),   // 当前页数据
+                tuple.getT2(),  // 总记录数
+                page,           // 当前页码
+                size            // 每页大小
+            ));
+    }
+}
