@@ -206,3 +206,17 @@ public class PageResult<T> {
     
     // Getters, Setters, 构造方法
 }
+
+
+
+ @GetMapping("/search")
+    public Mono<PageResult<Article>> search(
+        @RequestParam(required = false) String keyword,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant start,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant end,
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "10") int size
+    ) {
+        return articleService.searchArticles(keyword, start, end, page, size);
+    }
+}
