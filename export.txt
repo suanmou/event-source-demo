@@ -195,3 +195,14 @@ public class ArticleService {
             ));
     }
 }
+
+
+
+public class PageResult<T> {
+    private List<T> data;      // 当前页数据
+    private long total;         // 总记录数
+    private int page;           // 当前页码
+    private int size;           // 每页大小
+    
+    // Getters, Setters, 构造方法
+}
