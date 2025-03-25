@@ -1,0 +1,162 @@
+<!-- JsonDiffHighlighter.vue -->
+<template>
+  <div class="json-diff-container">
+    <!-- 并排对比布局 -->
+    <div class="json-pane">
+      <prism-editor
+        class="json-editor"
+        v-model="leftHighlightedJson"
+        :highlight="highlighter"
+        readonly
+      />
+    </div>
+    <div class="json-pane">
+      <prism-editor
+        class="json-editor"
+        v-model="rightHighlightedJson"
+        :highlight="highlighter"
+        readonly
+      />
+    </div>
+  </div>
+</template>
+
+<script>
+import { PrismEditor } from 'vue-prism-editor'
+import { diff } from 'deep-diff'
+import Prism from 'prismjs'
+import 'prismjs/themes/prism.css'
+import 'vue-prism-editor/dist/prismeditor.min.css'
+
+export default {
+  components: { PrismEditor },
+  props: {
+    oldData: { type: Object, required: true },
+    newData: { type: Object, required: true }
+  },
+  data() {
+    return {
+      diffs: new Set() // 存储所有差异路径
+    }
+  },
+  computed: {
+    // 带标记的JSON字符串
+    leftHighlightedJson() {
+      return this.markDiffPaths(JSON.stringify(this.oldData, null, 2), 'old')
+    },
+    rightHighlightedJson() {
+      return this.markDiffPaths(JSON.stringify(this.newData, null, 2), 'new')
+    }
+  },
+  mounted() {
+    this.calculateDiffs()
+  },
+  methods: {
+    // 核心方法：使用deep-diff计算差异
+    calculateDiffs() {
+      const differences = diff(this.oldData, this.newData)
+      
+      differences?.forEach((change) => {
+        const path = this.getChangePath(change)
+        this.diffs.add(path)
+        
+        // 处理数组索引变化
+        if (change.kind === 'A') {
+          this.diffs.add(`${path}.${change.index}`)
+        }
+      })
+    },
+
+    // 获取变更路径（兼容数组）
+    getChangePath(change) {
+      return change.path
+        ? change.path.join('.')
+        : change.index !== undefined 
+          ? `${change.path?.join('.') || ''}[${change.index}]`
+          : ''
+    },
+
+    // 标记差异路径
+    markDiffPaths(jsonStr, source) {
+      return jsonStr.split('\n').map(line => {
+        const keyPath = this.parseLinePath(line, source)
+        return this.diffs.has(keyPath) 
+          ? `<span class="diff-highlight">${line}</span>`
+          : line
+      }).join('\n')
+    },
+
+    // 解析行对应的路径（关键逻辑）
+    parseLinePath(line, source) {
+      const indent = line.match(/^ */)[0].length / 2
+      const keyMatch = line.match(/"(.*?)":/)
+      if (!keyMatch) return ''
+
+      // 构建路径栈
+      const pathStack = []
+      let currentIndent = 0
+      const lines = source === 'old' 
+        ? this.leftHighlightedJson.split('\n')
+        : this.rightHighlightedJson.split('\n')
+
+      for (const l of lines) {
+        if (l === line) break
+        
+        const lineIndent = l.match(/^ */)[0].length / 2
+        if (lineIndent < currentIndent) {
+          pathStack.splice(lineIndent)
+        }
+        
+        const k = l.match(/"(.*?)":/)
+        if (k && lineIndent === currentIndent) {
+          pathStack[currentIndent] = k[1]
+          currentIndent++
+        }
+      }
+      
+      return pathStack.slice(0, indent).concat(keyMatch[1]).join('.')
+    },
+
+    // Prism高亮器
+    highlighter(code) {
+      return Prism.highlight(
+        code,
+        Prism.languages.json,
+        'json'
+      )
+    }
+  }
+}
+</script>
+
+<style>
+.json-diff-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  height: 600px;
+}
+
+.json-editor {
+  background: #f8f8f8;
+  padding: 15px;
+  border-radius: 4px;
+  height: 100%;
+  overflow: auto;
+}
+
+.diff-highlight {
+  background-color: #ffd70033;
+  position: relative;
+}
+
+.diff-highlight::after {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: #ff4444;
+}
+</style>
