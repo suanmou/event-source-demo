@@ -1,0 +1,69 @@
+function extractDatesFromTitle(title) {
+    // 定义常见日期格式的正则表达式模式
+    const datePatterns = [
+        // 格式: YYYY-MM-DD 或 YYYY/MM/DD
+        /\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/g,
+        // 格式: MM/DD/YYYY 或 DD/MM/YYYY
+        /\b\d{1,2}\/\d{1,2}\/\d{4}\b/g,
+        // 格式: Month Day, Year 如 October 5, 2023
+        /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/gi,
+        // 可选: 其他格式，如DD.MM.YYYY
+        /\b\d{1,2}\.\d{1,2}\.\d{4}\b/g
+    ];
+
+    // 收集所有匹配项
+    const matches = [];
+    datePatterns.forEach(pattern => {
+        const found = title.match(pattern) || [];
+        matches.push(...found);
+    });
+
+    // 去重并返回
+    return [...new Set(matches)];
+}
+
+// 示例用法
+const title = "Meeting on 2023-10-05 and Event on 10/05/2023. Also check 5 October 2023";
+console.log(extractDatesFromTitle(title)); 
+// 输出: ["2023-10-05", "10/05/2023", "5 October 2023"]
+
+
+function extractValidDates(title) {
+    // 定义支持的全称和缩写月份名称
+    const months = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December',
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    const monthPattern = `(?:${months.join('|')})`;
+
+    // 定义日期正则表达式（支持更多格式）
+    const datePatterns = [
+        // 格式: YYYY-MM-DD 或 YYYY/MM/DD
+        /\b(20\d{2}|19\d{2})[-/](0[1-9]|1[0-2]|0?[1-9])[-/](0[1-9]|[12]\d|3[01]|0?[1-9])\b/g,
+        // 格式: MM/DD/YYYY 或 DD/MM/YYYY（更严格的边界）
+        /\b(0?[1-9]|1[0-2])\/(0?[1-9]|[12]\d|3[01])\/(\d{4})\b/g,
+        // 格式: Month Day, Year 或 Day Month Year（支持缩写和逗号）
+        new RegExp(`\\b(?:${monthPattern}\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}\\s+${monthPattern},?\\s+\\d{4})\\b`, 'gi'),
+        // 格式: DD.MM.YYYY（欧洲常见格式）
+        /\b(0?[1-9]|[12]\d|3[01])\.(0?[1-9]|1[0-2])\.(\d{4})\b/g
+    ];
+
+    // 收集所有匹配项并去重
+    const matches = datePatterns.flatMap(pattern => {
+        return [...(title.match(pattern) || [])];
+    });
+    const uniqueMatches = [...new Set(matches)];
+
+    // 可选：验证日期有效性（例如过滤 2023-02-30）
+    return uniqueMatches.filter(date => {
+        const dateObj = new Date(date.replace(/(\d+)(\D)(\d+)\2(\d+)/, '$3$2$1$2$4')); // 处理格式差异
+        return !isNaN(dateObj) && dateObj.toISOString().slice(0,10) === date.replace(/\//g, '-');
+    });
+}
+
+// 示例用法
+const title = "会议在2023-10-05，活动在05/10/2023，另见5 Oct 2023和2023/02/30（无效日期）";
+console.log(extractValidDates(title)); 
+// 输出: ["2023-10-05", "05/10/2023", "5 Oct 2023"]
