@@ -1,0 +1,330 @@
+const { Worker, isMainThread, parentPort } = require('worker_threads');
+const cluster = require('cluster');
+const axios = require('axios');
+const ws = require('ws');
+const { program } = require('commander');
+const { Histogram } = require('perf_hooks').performance;
+
+// 主控程序
+class MasterController {
+  constructor() {
+    this.workers = new Map();
+    this.stats = {
+      total: 0,
+      success: 0,
+      errors: 0,
+      histogram: new Histogram()
+    };
+  }
+
+  async start(config) {
+    // 启动WebSocket监控服务
+    const wss = new ws.Server({ port: 8080 });
+    wss.on('connection', (ws) => this.handleWebSocket(ws));
+
+    // 启动集群
+    if (cluster.isMaster) {
+      this.startCluster(config);
+    } else {
+      this.startWorker(config);
+    }
+  }
+
+  startCluster(config) {
+    const numCPUs = require('os').cpus().length;
+    
+    // 主节点分配任务
+    for (let i = 0; i < numCPUs; i++) {
+      const worker = cluster.fork();
+      worker.on('message', (msg) => this.aggregateStats(msg));
+    }
+
+    // 动态负载调节
+    setInterval(() => this.adjustLoad(config), 5000);
+  }
+
+  startWorker(config) {
+    const testEngine = new TestEngine(config);
+    testEngine.on('stats', (stats) => {
+      process.send(stats);
+    });
+    testEngine.start();
+  }
+
+  aggregateStats(stats) {
+    this.stats.total += stats.total;
+    this.stats.success += stats.success;
+    this.stats.errors += stats.errors;
+    this.stats.histogram.record(stats.latencies);
+  }
+
+  adjustLoad(config) {
+    const errorRate = this.stats.errors / this.stats.total;
+    if (errorRate > 0.1) {
+      config.concurrency = Math.max(1, config.concurrency * 0.8);
+    } else {
+      config.concurrency = Math.min(1000, config.concurrency * 1.2);
+    }
+  }
+
+  handleWebSocket(ws) {
+    const interval = setInterval(() => {
+      ws.send(JSON.stringify({
+        rps: this.calculateRPS(),
+        latency: this.calculateLatency(),
+        errors: this.stats.errors
+      }));
+    }, 1000);
+
+    ws.on('close', () => clearInterval(interval));
+  }
+
+  calculateRPS() {
+    return this.stats.histogram.mean;
+  }
+
+  calculateLatency() {
+    return {
+      p50: this.stats.histogram.percentile(50),
+      p95: this.stats.histogram.percentile(95),
+      p99: this.stats.histogram.percentile(99)
+    };
+  }
+}
+
+// 测试引擎
+class TestEngine {
+  constructor(config) {
+    this.config = config;
+    this.interval = null;
+    this.connPool = this.createConnectionPool();
+  }
+
+  createConnectionPool() {
+    return new http.Agent({
+      keepAlive: true,
+      maxSockets: 1000,
+      timeout: 5000
+    });
+  }
+
+  async start() {
+    const startTime = Date.now();
+    const workers = [];
+    
+    // 使用Worker Threads实现二级并发
+    for (let i = 0; i < this.config.concurrency; i++) {
+      workers.push(new Worker(__filename, {
+        workerData: {
+          ...this.config,
+          connPool: this.connPool
+        }
+      }));
+    }
+
+    // 定时报告统计
+    this.interval = setInterval(() => {
+      const stats = this.collectStats();
+      process.emit('stats', stats);
+    }, 1000);
+
+    await Promise.all(workers);
+  }
+
+  collectStats() {
+    return {
+      total: this.totalRequests,
+      success: this.successRequests,
+      errors: this.errorRequests,
+      latencies: this.latencySamples
+    };
+  }
+
+  static async workerTask() {
+    const config = workerData;
+    const endTime = Date.now() + config.duration * 1000;
+    
+    while (Date.now() < endTime) {
+      const requests = [];
+      for (let i = 0; i < config.ratePerWorker; i++) {
+        requests.push(this.sendRequest(config));
+      }
+      await Promise.all(requests);
+    }
+  }
+
+  async sendRequest(config) {
+    try {
+      const start = process.hrtime.bigint();
+      await axios({
+        method: config.method,
+        url: config.url,
+        httpAgent: config.connPool,
+        validateStatus: () => true
+      });
+      const latency = Number(process.hrtime.bigint() - start) / 1e6;
+      this.recordLatency(latency);
+    } catch (error) {
+      this.recordError();
+    }
+  }
+}
+
+// 命令行配置
+program
+  .requiredOption('-u, --url <url>', '测试目标URL')
+  .option('-c, --concurrency <number>', '并发数', 100)
+  .option('-d, --duration <seconds>', '持续时间', 60)
+  .option('-r, --ramp-up <seconds>', '压力爬坡时间', 10)
+  .parse(process.argv);
+
+if (isMainThread) {
+  const controller = new MasterController();
+  controller.start(program.opts());
+} else {
+  TestEngine.workerTask();
+}
+
+
+
+
+class DataDrivenTest {
+  constructor(csvFile) {
+    this.data = this.loadCSV(csvFile);
+    this.index = 0;
+  }
+
+  async loadCSV(file) {
+    const content = await fs.promises.readFile(file);
+    return parse(content, { columns: true });
+  }
+
+  getNextParams() {
+    const row = this.data[this.index % this.data.length];
+    this.index++;
+    return row;
+  }
+}
+
+// 在发送请求时使用
+const dataDriver = new DataDrivenTest('testdata.csv');
+const params = dataDriver.getNextParams();
+axios.get(`${config.url}?${new URLSearchParams(params)}`);
+
+
+
+
+class Transaction {
+  constructor(name) {
+    this.name = name;
+    this.startTime = 0;
+    this.duration = 0;
+  }
+
+  start() {
+    this.startTime = performance.now();
+  }
+
+  end() {
+    this.duration = performance.now() - this.startTime;
+    return this.duration;
+  }
+}
+
+// 使用示例
+const loginTransaction = new Transaction('用户登录');
+loginTransaction.start();
+await performLogin();
+const duration = loginTransaction.end();
+
+
+
+class Assertion {
+  static statusCode(response, expected) {
+    if (response.status !== expected) {
+      throw new Error(`Expected ${expected} but got ${response.status}`);
+    }
+  }
+
+  static responseTime(response, maxTime) {
+    if (response.duration > maxTime) {
+      throw new Error(`Response time exceeded ${maxTime}ms`);
+    }
+  }
+
+  static jsonPath(response, path, expected) {
+    const value = jp.query(response.data, path)[0];
+    if (value !== expected) {
+      throw new Error(`Expected ${expected} at ${path} but got ${value}`);
+    }
+  }
+}
+
+// 在请求后使用
+try {
+  Assertion.statusCode(response, 200);
+  Assertion.responseTime(response, 1000);
+} catch (e) {
+  recordError();
+}
+
+
+
+
+
+const http = require('http');
+const https = require('https');
+
+const createPool = (max = 1000) => ({
+  http: new http.Agent({
+    keepAlive: true,
+    maxSockets: max,
+    timeout: 30000
+  }),
+  https: new https.Agent({
+    keepAlive: true,
+    maxSockets: max,
+    rejectUnauthorized: false
+  })
+});
+
+// 在axios配置中
+axios.defaults.httpAgent = pools.http;
+axios.defaults.httpsAgent = pools.https;
+
+
+
+
+
+const { encode, decode } = require('msgpack-lite');
+
+class BinaryProtocol {
+  static serialize(data) {
+    return encode(data);
+  }
+
+  static deserialize(buffer) {
+    return decode(new Uint8Array(buffer));
+  }
+}
+
+// 发送二进制请求
+axios.post(config.url, BinaryProtocol.serialize(payload), {
+  headers: {
+    'Content-Type': 'application/x-msgpack'
+  }
+});
+
+
+
+
+const { createAnalysis } = require('./analyzer');
+
+async function analyze() {
+  const report = await fs.readJson('report.json');
+  const analysis = createAnalysis(report);
+  
+  console.log('瓶颈分析:', analysis.identifyBottlenecks());
+  console.log('容量预测:', analysis.predictCapacity());
+  console.log('异常检测:', analysis.detectAnomalies());
+}
