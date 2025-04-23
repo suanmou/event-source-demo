@@ -1,206 +1,330 @@
+const { Worker, isMainThread, parentPort } = require('worker_threads');
+const cluster = require('cluster');
+const axios = require('axios');
+const ws = require('ws');
+const { program } = require('commander');
+const { Histogram } = require('perf_hooks').performance;
 
-<build>
-    <plugins>
-        <!-- 其他插件配置 -->
+// 主控程序
+class MasterController {
+  constructor() {
+    this.workers = new Map();
+    this.stats = {
+      total: 0,
+      success: 0,
+      errors: 0,
+      histogram: new Histogram()
+    };
+  }
 
-        <!-- 使用exec-maven-plugin执行外部脚本 -->
-        <plugin>
-            <groupId>org.codehaus.mojo</groupId>
-            <artifactId>exec-maven-plugin</artifactId>
-            <version>3.0.0</version> <!-- 使用最新版本 -->
-            <executions>
-                <execution>
-                    <id>generate-resource-list</id>
-                    <phase>generate-resources</phase> <!-- 在生成资源阶段执行 -->
-                    <goals>
-                        <goal>exec</goal>
-                    </goals>
-                    <configuration>
-                        <executable>./generate-resource-list.sh</executable> <!-- 脚本路径 -->
-                        <workingDirectory>${project.basedir}</workingDirectory> <!-- 工作目录 -->
-                    </configuration>
-                </execution>
-            </executions>
-        </plugin>
+  async start(config) {
+    // 启动WebSocket监控服务
+    const wss = new ws.Server({ port: 8080 });
+    wss.on('connection', (ws) => this.handleWebSocket(ws));
 
-        <!-- 确保生成的文件被复制到目标目录中 -->
-        <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-resources-plugin</artifactId>
-            <version>3.2.0</version> <!-- 使用最新版本 -->
-            <executions>
-                <execution>
-                    <id>copy-resource-list</id>
-                    <phase>process-resources</phase> <!-- 在处理资源阶段执行 -->
-                    <goals>
-                        <goal>copy-resources</goal>
-                    </goals>
-                    <configuration>
-                        <outputDirectory>${project.build.directory}/classes/META-INF</outputDirectory> <!-- 目标目录 -->
-                        <resources>
-                            <resource>
-                                <directory>${project.basedir}/target/generated-resources</directory> <!-- 生成文件的源目录 -->
-                                <includes>
-                                    <include>resource-list.json</include> <!-- 要复制的文件 -->
-                                </includes>
-                            </resource>
-                        </resources>
-                    </configuration>
-                </execution>
-            </executions>
-        </plugin>
-    </plugins>
-</build>
+    // 启动集群
+    if (cluster.isMaster) {
+      this.startCluster(config);
+    } else {
+      this.startWorker(config);
+    }
+  }
 
-
-#!/bin/bash
-
-# 指定资源目录和输出文件
-RESOURCE_DIR="src/main/resources/static"
-OUTPUT_FILE="target/generated-resources/resource-list.json"
-
-# 创建输出文件的目录（如果不存在）
-mkdir -p "$(dirname "$OUTPUT_FILE")"
-
-# 初始化JSON数组
-echo "[" > "$OUTPUT_FILE"
-
-# 遍历资源目录并生成JSON条目
-find "$RESOURCE_DIR" -type f | while read -r FILE; do
-    # 获取相对路径（从RESOURCE_DIR开始）
-    REL_PATH="${FILE#$RESOURCE_DIR/}"
-    # 转义JSON特殊字符（这里简单处理，实际情况可能需要更复杂的转义逻辑）
-    REL_PATH=$(echo "$REL_PATH" | sed 's/[\\\/]/\\\\/g; s/"/\\\"/g')
-    # 添加JSON对象到数组中
-    echo "    {\"path\": \"$REL_PATH\"}," >> "$OUTPUT_FILE"
-done
-
-# 移除最后一个逗号并添加数组闭括号
-sed -i '$ s/,$//' "$OUTPUT_FILE"
-echo "]" >> "$OUTPUT_FILE"
-
-echo "Resource list generated at $OUTPUT_FILE"
-
-
-<!-- pom.xml -->
-<plugin>
-    <groupId>org.codehaus.mojo</groupId>
-    <artifactId>exec-maven-plugin</artifactId>
-    <version>3.1.0</version>
-    <executions>
-        <execution>
-            <phase>process-resources</phase>
-            <goals>
-                <goal>java</goal>
-            </goals>
-        </execution>
-    </executions>
-    <configuration>
-        <mainClass>com.example.util.DirectoryScanner</mainClass>
-        <arguments>
-            <argument>src/main/resources/static/files</argument>
-            <argument>target/classes/static/files.json</argument>
-        </arguments>
-    </configuration>
-</plugin>
-
-
-// src/main/java/com/example/util/DirectoryScanner.java
-public class DirectoryScanner {
-    public static void generateDirectoryJson(Path sourceDir, Path outputPath) throws IOException {
-        JsonArray tree = scanDirectory(sourceDir);
-        Files.write(outputPath, tree.toString().getBytes());
+  startCluster(config) {
+    const numCPUs = require('os').cpus().length;
+    
+    // 主节点分配任务
+    for (let i = 0; i < numCPUs; i++) {
+      const worker = cluster.fork();
+      worker.on('message', (msg) => this.aggregateStats(msg));
     }
 
-    private static JsonArray scanDirectory(Path dir) throws IOException {
-        JsonArray jsonArray = new JsonArray();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
-            for (Path path : stream) {
-                JsonObject obj = new JsonObject();
-                obj.addProperty("name", path.getFileName().toString());
-                obj.addProperty("type", Files.isDirectory(path) ? "directory" : "file");
-                if (Files.isDirectory(path)) {
-                    obj.add("children", scanDirectory(path));
-                }
-                jsonArray.add(obj);
-            }
+    // 动态负载调节
+    setInterval(() => this.adjustLoad(config), 5000);
+  }
+
+  startWorker(config) {
+    const testEngine = new TestEngine(config);
+    testEngine.on('stats', (stats) => {
+      process.send(stats);
+    });
+    testEngine.start();
+  }
+
+  aggregateStats(stats) {
+    this.stats.total += stats.total;
+    this.stats.success += stats.success;
+    this.stats.errors += stats.errors;
+    this.stats.histogram.record(stats.latencies);
+  }
+
+  adjustLoad(config) {
+    const errorRate = this.stats.errors / this.stats.total;
+    if (errorRate > 0.1) {
+      config.concurrency = Math.max(1, config.concurrency * 0.8);
+    } else {
+      config.concurrency = Math.min(1000, config.concurrency * 1.2);
+    }
+  }
+
+  handleWebSocket(ws) {
+    const interval = setInterval(() => {
+      ws.send(JSON.stringify({
+        rps: this.calculateRPS(),
+        latency: this.calculateLatency(),
+        errors: this.stats.errors
+      }));
+    }, 1000);
+
+    ws.on('close', () => clearInterval(interval));
+  }
+
+  calculateRPS() {
+    return this.stats.histogram.mean;
+  }
+
+  calculateLatency() {
+    return {
+      p50: this.stats.histogram.percentile(50),
+      p95: this.stats.histogram.percentile(95),
+      p99: this.stats.histogram.percentile(99)
+    };
+  }
+}
+
+// 测试引擎
+class TestEngine {
+  constructor(config) {
+    this.config = config;
+    this.interval = null;
+    this.connPool = this.createConnectionPool();
+  }
+
+  createConnectionPool() {
+    return new http.Agent({
+      keepAlive: true,
+      maxSockets: 1000,
+      timeout: 5000
+    });
+  }
+
+  async start() {
+    const startTime = Date.now();
+    const workers = [];
+    
+    // 使用Worker Threads实现二级并发
+    for (let i = 0; i < this.config.concurrency; i++) {
+      workers.push(new Worker(__filename, {
+        workerData: {
+          ...this.config,
+          connPool: this.connPool
         }
-        return jsonArray;
+      }));
     }
+
+    // 定时报告统计
+    this.interval = setInterval(() => {
+      const stats = this.collectStats();
+      process.emit('stats', stats);
+    }, 1000);
+
+    await Promise.all(workers);
+  }
+
+  collectStats() {
+    return {
+      total: this.totalRequests,
+      success: this.successRequests,
+      errors: this.errorRequests,
+      latencies: this.latencySamples
+    };
+  }
+
+  static async workerTask() {
+    const config = workerData;
+    const endTime = Date.now() + config.duration * 1000;
+    
+    while (Date.now() < endTime) {
+      const requests = [];
+      for (let i = 0; i < config.ratePerWorker; i++) {
+        requests.push(this.sendRequest(config));
+      }
+      await Promise.all(requests);
+    }
+  }
+
+  async sendRequest(config) {
+    try {
+      const start = process.hrtime.bigint();
+      await axios({
+        method: config.method,
+        url: config.url,
+        httpAgent: config.connPool,
+        validateStatus: () => true
+      });
+      const latency = Number(process.hrtime.bigint() - start) / 1e6;
+      this.recordLatency(latency);
+    } catch (error) {
+      this.recordError();
+    }
+  }
+}
+
+// 命令行配置
+program
+  .requiredOption('-u, --url <url>', '测试目标URL')
+  .option('-c, --concurrency <number>', '并发数', 100)
+  .option('-d, --duration <seconds>', '持续时间', 60)
+  .option('-r, --ramp-up <seconds>', '压力爬坡时间', 10)
+  .parse(process.argv);
+
+if (isMainThread) {
+  const controller = new MasterController();
+  controller.start(program.opts());
+} else {
+  TestEngine.workerTask();
+}
+
+
+
+
+class DataDrivenTest {
+  constructor(csvFile) {
+    this.data = this.loadCSV(csvFile);
+    this.index = 0;
+  }
+
+  async loadCSV(file) {
+    const content = await fs.promises.readFile(file);
+    return parse(content, { columns: true });
+  }
+
+  getNextParams() {
+    const row = this.data[this.index % this.data.length];
+    this.index++;
+    return row;
+  }
+}
+
+// 在发送请求时使用
+const dataDriver = new DataDrivenTest('testdata.csv');
+const params = dataDriver.getNextParams();
+axios.get(`${config.url}?${new URLSearchParams(params)}`);
+
+
+
+
+class Transaction {
+  constructor(name) {
+    this.name = name;
+    this.startTime = 0;
+    this.duration = 0;
+  }
+
+  start() {
+    this.startTime = performance.now();
+  }
+
+  end() {
+    this.duration = performance.now() - this.startTime;
+    return this.duration;
+  }
+}
+
+// 使用示例
+const loginTransaction = new Transaction('用户登录');
+loginTransaction.start();
+await performLogin();
+const duration = loginTransaction.end();
+
+
+
+class Assertion {
+  static statusCode(response, expected) {
+    if (response.status !== expected) {
+      throw new Error(`Expected ${expected} but got ${response.status}`);
+    }
+  }
+
+  static responseTime(response, maxTime) {
+    if (response.duration > maxTime) {
+      throw new Error(`Response time exceeded ${maxTime}ms`);
+    }
+  }
+
+  static jsonPath(response, path, expected) {
+    const value = jp.query(response.data, path)[0];
+    if (value !== expected) {
+      throw new Error(`Expected ${expected} at ${path} but got ${value}`);
+    }
+  }
+}
+
+// 在请求后使用
+try {
+  Assertion.statusCode(response, 200);
+  Assertion.responseTime(response, 1000);
+} catch (e) {
+  recordError();
 }
 
 
 
 
 
-chmod +x generate-resource-list.sh
+const http = require('http');
+const https = require('https');
+
+const createPool = (max = 1000) => ({
+  http: new http.Agent({
+    keepAlive: true,
+    maxSockets: max,
+    timeout: 30000
+  }),
+  https: new https.Agent({
+    keepAlive: true,
+    maxSockets: max,
+    rejectUnauthorized: false
+  })
+});
+
+// 在axios配置中
+axios.defaults.httpAgent = pools.http;
+axios.defaults.httpsAgent = pools.https;
 
 
 
-<dependency>
-    <groupId>com.fasterxml.jackson.core</groupId>
-    <artifactId>jackson-databind</artifactId>
-    <version>2.15.2</version>
-</dependency>
 
 
-<build>
-    <plugins>
-        <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-antrun-plugin</artifactId>
-            <version>1.8</version>
-            <executions>
-                <execution>
-                    <id>generate-resource-list</id>
-                    <phase>prepare-package</phase>
-                    <configuration>
-                        <target>
-                            <java classname="com.example.GenerateResourceList" fork="true">
-                                <classpath>
-                                    <path refid="maven.runtime.classpath"/>
-                                </classpath>
-                            </java>
-                        </target>
-                    </configuration>
-                    <goals>
-                        <goal>run</goal>
-                    </goals>
-                </execution>
-            </executions>
-        </plugin>
-    </plugins>
-</build>
+const { encode, decode } = require('msgpack-lite');
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
-import org.springframework.core.io.support.ResourcePatternResolver;
+class BinaryProtocol {
+  static serialize(data) {
+    return encode(data);
+  }
 
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
+  static deserialize(buffer) {
+    return decode(new Uint8Array(buffer));
+  }
+}
 
-public class GenerateResourceList {
-    public static void main(String[] args) {
-        try {
-            ResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
-            Resource[] resources = resolver.getResources("classpath*:*");
-            List<String> resourceNames = new ArrayList<>();
-            for (Resource resource : resources) {
-                if (resource.getFilename() != null) {
-                    resourceNames.add(resource.getFilename());
-                }
-            }
+// 发送二进制请求
+axios.post(config.url, BinaryProtocol.serialize(payload), {
+  headers: {
+    'Content-Type': 'application/x-msgpack'
+  }
+});
 
-            ObjectMapper objectMapper = new ObjectMapper();
-            String json = objectMapper.writeValueAsString(resourceNames);
 
-            File outputFile = new File("src/main/resources/resource_list.json");
-            objectMapper.writeValue(outputFile, resourceNames);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
+
+
+const { createAnalysis } = require('./analyzer');
+
+async function analyze() {
+  const report = await fs.readJson('report.json');
+  const analysis = createAnalysis(report);
+  
+  console.log('瓶颈分析:', analysis.identifyBottlenecks());
+  console.log('容量预测:', analysis.predictCapacity());
+  console.log('异常检测:', analysis.detectAnomalies());
 }
