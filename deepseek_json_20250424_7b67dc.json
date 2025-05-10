@@ -1,0 +1,33 @@
+{
+  "config": [
+    {
+      "name": "登录压力测试",
+      "threads": 50,
+      "iterations": 10,
+      "rampUp": 30,
+      "requests": [...]
+    }
+  ],
+  "summary": {
+    "totalRequests": 1000,
+    "successRate": "98.50%",
+    "avgResponseTime": "256.78ms",
+    "percentiles": {
+      "p50": "201.34ms",
+      "p90": "356.12ms",
+      "p99": "489.23ms"
+    },
+    "errorDistribution": {
+      "500": 12,
+      "401": 3,
+      "NETWORK_ERROR": 2
+    }
+  },
+  "details": {
+    "total": 1000,
+    "success": 985,
+    "errors": 15,
+    "responseTimes": [234, 198, ...],
+    "errorDetails": {...}
+  }
+}
