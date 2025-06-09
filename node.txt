@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>节点管理控制台</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: #f5f7fa;
+      color: #333;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    #app {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #409EFF, #337ecc);
+      color: white;
+      padding: 15px 25px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      font-size: 20px;
+      font-weight: bold;
+    }
+    
+    .logo i {
+      margin-right: 10px;
+      font-size: 24px;
+    }
+    
+    .main-container {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      padding: 20px;
+      gap: 20px;
+    }
+    
+    .node-list {
+      width: 320px;
+      background: white;
+      border-radius: 6px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .list-header {
+      padding: 15px 20px;
+      background: #f5f7fa;
+      border-bottom: 1px solid #ebeef5;
+      font-weight: bold;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .nodes-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+    }
+    
+    .node-item {
+      padding: 15px;
+      margin-bottom: 12px;
+      border-radius: 4px;
+      border: 1px solid #ebeef5;
+      cursor: pointer;
+      transition: all 0.3s;
+      position: relative;
+    }
+    
+    .node-item:hover {
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      transform: translateY(-2px);
+      border-color: #409EFF;
+    }
+    
+    .node-item.active {
+      border-color: #409EFF;
+      background-color: #ecf5ff;
+    }
+    
+    .node-status {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    
+    .status-online {
+      background-color: #67C23A;
+      box-shadow: 0 0 6px #67C23A;
+    }
+    
+    .status-offline {
+      background-color: #F56C6C;
+    }
+    
+    .status-connecting {
+      background-color: #E6A23C;
+      animation: pulse 1.5s infinite;
+    }
+    
+    @keyframes pulse {
+      0% { opacity: 0.6; }
+      50% { opacity: 1; }
+      100% { opacity: 0.6; }
+    }
+    
+    .node-name {
+      font-weight: bold;
+      margin-bottom: 5px;
+      font-size: 16px;
+    }
+    
+    .node-info {
+      color: #909399;
+      font-size: 13px;
+      margin: 5px 0;
+    }
+    
+    .detail-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: white;
+      border-radius: 6px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+    }
+    
+    .detail-header {
+      padding: 15px 20px;
+      background: #f5f7fa;
+      border-bottom: 1px solid #ebeef5;
+      font-weight: bold;
+    }
+    
+    .detail-content {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+    }
+    
+    .detail-section {
+      margin-bottom: 25px;
+    }
+    
+    .detail-title {
+      font-size: 16px;
+      font-weight: bold;
+      margin-bottom: 15px;
+      color: #409EFF;
+      display: flex;
+      align-items: center;
+    }
+    
+    .detail-title i {
+      margin-right: 8px;
+    }
+    
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+    }
+    
+    .info-item {
+      display: flex;
+    }
+    
+    .info-label {
+      width: 120px;
+      color: #909399;
+    }
+    
+    .info-value {
+      flex: 1;
+      font-weight: 500;
+    }
+    
+    .console-container {
+      background: #1e1e1e;
+      border-radius: 4px;
+      padding: 15px;
+      color: #d4d4d4;
+      font-family: 'Consolas', monospace;
+      height: 300px;
+      overflow-y: auto;
+      margin-top: 15px;
+    }
+    
+    .console-message {
+      margin-bottom: 8px;
+      line-height: 1.5;
+      word-wrap: break-word;
+    }
+    
+    .console-input {
+      display: flex;
+      margin-top: 15px;
+    }
+    
+    .console-input input {
+      flex: 1;
+      background: #2d2d2d;
+      border: 1px solid #3c3c3c;
+      color: #d4d4d4;
+      padding: 8px 12px;
+      border-radius: 4px 0 0 4px;
+      outline: none;
+    }
+    
+    .console-input button {
+      background: #409EFF;
+      color: white;
+      border: none;
+      padding: 8px 15px;
+      border-radius: 0 4px 4px 0;
+      cursor: pointer;
+    }
+    
+    .action-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+    }
+    
+    .footer {
+      text-align: center;
+      padding: 15px;
+      color: #909399;
+      font-size: 13px;
+      border-top: 1px solid #ebeef5;
+      background: #f5f7fa;
+    }
+    
+    .status-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-left: 8px;
+    }
+    
+    .tag-online {
+      background-color: #f0f9eb;
+      color: #67C23A;
+    }
+    
+    .tag-offline {
+      background-color: #fef0f0;
+      color: #F56C6C;
+    }
+    
+    .tag-connecting {
+      background-color: #fdf6ec;
+      color: #E6A23C;
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: #909399;
+    }
+    
+    .empty-state i {
+      font-size: 48px;
+      margin-bottom: 15px;
+      color: #c0c4cc;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="header">
+      <div class="logo">
+        <i class="el-icon-s-platform"></i>
+        <span>节点管理控制台</span>
+      </div>
+      <div class="header-info">
+        <el-tag type="success">已连接 {{ connectedCount }} 个节点</el-tag>
+      </div>
+    </div>
+    
+    <div class="main-container">
+      <div class="node-list">
+        <div class="list-header">
+          <span>可连接节点</span>
+          <el-button type="primary" size="mini" icon="el-icon-refresh" @click="refreshNodes">刷新</el-button>
+        </div>
+        <div class="nodes-container">
+          <div 
+            v-for="node in nodes" 
+            :key="node.id"
+            class="node-item"
+            :class="{ active: selectedNode && selectedNode.id === node.id }"
+            @click="selectNode(node)"
+          >
+            <div class="node-status" :class="getStatusClass(node)"></div>
+            <div class="node-name">{{ node.name }}</div>
+            <div class="node-info">
+              <i class="el-icon-cpu"></i> CPU: {{ node.cpu }} | <i class="el-icon-memory"></i> 内存: {{ node.memory }}
+            </div>
+            <div class="node-info">
+              <i class="el-icon-location"></i> IP: {{ node.ip }}:{{ node.port }}
+            </div>
+            <div class="node-info">
+              <i class="el-icon-time"></i> 最后活跃: {{ node.lastActive }}
+            </div>
+          </div>
+          
+          <div v-if="nodes.length === 0" class="empty-state">
+            <i class="el-icon-folder-opened"></i>
+            <p>暂无可用节点</p>
+          </div>
+        </div>
+      </div>
+      
+      <div class="detail-panel">
+        <div class="detail-header">
+          <span v-if="selectedNode">{{ selectedNode.name }} - 详细信息</span>
+          <span v-else>请选择节点</span>
+        </div>
+        
+        <div class="detail-content" v-if="selectedNode">
+          <div class="detail-section">
+            <div class="detail-title">
+              <i class="el-icon-info"></i> 基本信息
+              <span class="status-tag" :class="'tag-' + selectedNode.status">{{ getStatusText(selectedNode.status) }}</span>
+            </div>
+            <div class="info-grid">
+              <div class="info-item">
+                <span class="info-label">节点ID：</span>
+                <span class="info-value">{{ selectedNode.id }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">节点名称：</span>
+                <span class="info-value">{{ selectedNode.name }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">节点地址：</span>
+                <span class="info-value">{{ selectedNode.ip }}:{{ selectedNode.port }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">节点类型：</span>
+                <span class="info-value">{{ selectedNode.type }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">CPU使用率：</span>
+                <span class="info-value">{{ selectedNode.cpu }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">内存使用：</span>
+                <span class="info-value">{{ selectedNode.memory }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">最后活跃：</span>
+                <span class="info-value">{{ selectedNode.lastActive }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">连接协议：</span>
+                <span class="info-value">WebSocket ({{ selectedNode.protocol }})</span>
+              </div>
+            </div>
+          </div>
+          
+          <div class="detail-section">
+            <div class="detail-title">
+              <i class="el-icon-monitor"></i> 控制台
+            </div>
+            
+            <div class="console-container" ref="console">
+              <div v-for="(msg, index) in consoleMessages" :key="index" class="console-message">
+                <span :style="{ color: msg.type === 'sent' ? '#4EC9B0' : '#DCDCAA' }">
+                  [{{ msg.timestamp }}] {{ msg.content }}
+                </span>
+              </div>
+            </div>
+            
+            <div class="console-input">
+              <input 
+                type="text" 
+                v-model="command" 
+                placeholder="输入命令..."
+                :disabled="!isConnected"
+                @keyup.enter="sendCommand"
+              >
+              <button @click="sendCommand" :disabled="!isConnected || !command.trim()">
+                <i class="el-icon-s-promotion"></i> 发送
+              </button>
+            </div>
+            
+            <div class="action-buttons">
+              <el-button 
+                type="primary" 
+                :icon="isConnected ? 'el-icon-switch-button' : 'el-icon-connection'"
+                @click="toggleConnection"
+                :loading="connecting"
+              >
+                {{ isConnected ? '断开连接' : '连接节点' }}
+              </el-button>
+              <el-button 
+                type="info" 
+                icon="el-icon-delete"
+                @click="clearConsole"
+              >
+                清空控制台
+              </el-button>
+            </div>
+          </div>
+        </div>
+        
+        <div v-else class="empty-state">
+          <i class="el-icon-s-promotion"></i>
+          <p>请从左侧选择一个节点</p>
+        </div>
+      </div>
+    </div>
+    
+    <div class="footer">
+      © 2023 节点管理控制台 | 当前版本 v1.2.0
+    </div>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          nodes: [
+            {
+              id: 'node-001',
+              name: '边缘计算节点-01',
+              ip: '192.168.1.101',
+              port: 8080,
+              type: '边缘计算',
+              cpu: '24.5%',
+              memory: '1.8GB/4GB',
+              lastActive: '5分钟前',
+              status: 'online',
+              protocol: 'v1.2'
+            },
+            {
+              id: 'node-002',
+              name: '数据中心节点-02',
+              ip: '10.10.2.15',
+              port: 8081,
+              type: '数据中心',
+              cpu: '62.3%',
+              memory: '12.4GB/16GB',
+              lastActive: '2小时前',
+              status: 'online',
+              protocol: 'v1.1'
+            },
+            {
+              id: 'node-003',
+              name: '物联网网关节点',
+              ip: '172.16.30.5',
+              port: 8082,
+              type: '物联网',
+              cpu: '8.7%',
+              memory: '512MB/1GB',
+              lastActive: '15分钟前',
+              status: 'offline',
+              protocol: 'v1.0'
+            },
+            {
+              id: 'node-004',
+              name: '云服务器节点-04',
+              ip: '203.0.113.25',
+              port: 8080,
+              type: '云服务器',
+              cpu: '45.1%',
+              memory: '8.2GB/16GB',
+              lastActive: '1分钟前',
+              status: 'online',
+              protocol: 'v1.3'
+            }
+          ],
+          selectedNode: null,
+          connecting: false,
+          isConnected: false,
+          command: '',
+          consoleMessages: [],
+          wsConnection: null,
+          connectedCount: 3
+        };
+      },
+      methods: {
+        selectNode(node) {
+          this.selectedNode = node;
+          // 如果之前有连接，先断开
+          if (this.wsConnection) {
+            this.disconnect();
+          }
+          this.consoleMessages = [];
+        },
+        
+        getStatusClass(node) {
+          return {
+            'status-online': node.status === 'online',
+            'status-offline': node.status === 'offline',
+            'status-connecting': node.status === 'connecting'
+          };
+        },
+        
+        getStatusText(status) {
+          const statusMap = {
+            online: '在线',
+            offline: '离线',
+            connecting: '连接中'
+          };
+          return statusMap[status] || '未知';
+        },
+        
+        toggleConnection() {
+          if (this.isConnected) {
+            this.disconnect();
+          } else {
+            this.connectToNode();
+          }
+        },
+        
+        connectToNode() {
+          if (!this.selectedNode) {
+            this.$message.warning('请先选择一个节点');
+            return;
+          }
+          
+          if (this.selectedNode.status === 'offline') {
+            this.$message.error('该节点当前处于离线状态，无法连接');
+            return;
+          }
+          
+          this.connecting = true;
+          this.selectedNode.status = 'connecting';
+          
+          // 模拟WebSocket连接过程
+          setTimeout(() => {
+            this.isConnected = true;
+            this.connecting = false;
+            this.selectedNode.status = 'online';
+            
+            // 添加连接成功的消息
+            this.addConsoleMessage('系统', `成功连接到节点 ${this.selectedNode.name} (${this.selectedNode.ip}:${this.selectedNode.port})`, 'info');
+            this.addConsoleMessage('系统', '连接协议: WebSocket v1.2', 'info');
+            this.addConsoleMessage('系统', '输入 "help" 获取可用命令列表', 'info');
+            
+            // 模拟WebSocket连接
+            // 实际项目中这里应该是 new WebSocket(`ws://${this.selectedNode.ip}:${this.selectedNode.port}`)
+            // 并设置相应的onopen, onmessage, onerror, onclose事件处理
+          }, 1500);
+        },
+        
+        disconnect() {
+          if (this.wsConnection) {
+            // 实际项目中关闭WebSocket连接
+            // this.wsConnection.close();
+          }
+          
+          this.isConnected = false;
+          if (this.selectedNode) {
+            this.selectedNode.status = 'online'; // 假设断开后状态恢复为在线
+          }
+          
+          this.addConsoleMessage('系统', '已断开与节点的连接', 'info');
+        },
+        
+        sendCommand() {
+          if (!this.command.trim()) return;
+          
+          const cmd = this.command.trim();
+          this.addConsoleMessage('>', cmd, 'sent');
+          
+          // 模拟发送命令并接收响应
+          setTimeout(() => {
+            this.handleCommandResponse(cmd);
+          }, 300);
+          
+          this.command = '';
+        },
+        
+        handleCommandResponse(cmd) {
+          const responses = {
+            help: `可用命令:
+  - status: 查看节点状态
+  - info: 查看节点信息
+  - restart: 重启节点服务
+  - log: 查看最近日志
+  - clear: 清空控制台`,
+            status: `节点状态:
+  名称: ${this.selectedNode.name}
+  状态: 在线
+  CPU使用率: ${this.selectedNode.cpu}
+  内存使用: ${this.selectedNode.memory}
+  连接数: 12`,
+            info: `节点信息:
+  ID: ${this.selectedNode.id}
+  类型: ${this.selectedNode.type}
+  IP地址: ${this.selectedNode.ip}
+  端口: ${this.selectedNode.port}
+  协议版本: ${this.selectedNode.protocol}`,
+            restart: '节点服务正在重启...',
+            log: `最近日志:
+  [2023-06-09 10:23:12] 系统启动完成
+  [2023-06-09 10:25:45] 处理请求: GET /api/status
+  [2023-06-09 10:30:11] 新设备连接: Device-7A3B`,
+            clear: ''
+          };
+          
+          if (cmd === 'clear') {
+            this.clearConsole();
+            return;
+          }
+          
+          const response = responses[cmd] || `未知命令: ${cmd}。输入 "help" 获取帮助。`;
+          if (response) {
+            this.addConsoleMessage('<', response, 'received');
+          }
+        },
+        
+        addConsoleMessage(prefix, content, type) {
+          const now = new Date();
+          const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+          
+          this.consoleMessages.push({
+            prefix,
+            content,
+            type,
+            timestamp
+          });
+          
+          // 滚动到底部
+          this.$nextTick(() => {
+            const consoleEl = this.$refs.console;
+            if (consoleEl) {
+              consoleEl.scrollTop = consoleEl.scrollHeight;
+            }
+          });
+        },
+        
+        clearConsole() {
+          this.consoleMessages = [];
+        },
+        
+        refreshNodes() {
+          this.$message.success('节点列表已刷新');
+          // 模拟刷新节点数据
+          this.nodes.forEach(node => {
+            if (node.status === 'online') {
+              // 更新一些动态数据
+              const cpu = (Math.random() * 80).toFixed(1) + '%';
+              const memoryUsage = Math.floor(Math.random() * 1000) + 500;
+              node.cpu = cpu;
+              node.memory = `${(memoryUsage / 1024).toFixed(1)}GB/${(Math.floor(Math.random() * 4) + 2)}GB`;
+            }
+          });
+        }
+      },
+      watch: {
+        consoleMessages() {
+          // 确保控制台始终滚动到底部
+          this.$nextTick(() => {
+            const consoleEl = this.$refs.console;
+            if (consoleEl) {
+              consoleEl.scrollTop = consoleEl.scrollHeight;
+            }
+          });
+        }
+      }
+    });
+  </script>
+</body>
+</html>
