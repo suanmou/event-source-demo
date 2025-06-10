@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YAML与Java代码展示器 - 白色主题</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/styles/atom-one-light.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/languages/yaml.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/languages/java.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    }
+    
+    body {
+      background: linear-gradient(135deg, #f5f7fa 0%, #e4e7eb 100%);
+      color: #333;
+      min-height: 100vh;
+      padding: 30px;
+    }
+    
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    
+    header {
+      text-align: center;
+      padding: 20px 0 40px;
+    }
+    
+    header h1 {
+      font-size: 2.8rem;
+      margin-bottom: 15px;
+      background: linear-gradient(45deg, #4a6cf7, #8e44ad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      text-shadow: 0 2px 10px rgba(74, 108, 247, 0.1);
+      font-weight: 700;
+    }
+    
+    header p {
+      font-size: 1.2rem;
+      max-width: 700px;
+      margin: 0 auto;
+      line-height: 1.6;
+      color: #666;
+    }
+    
+    .app-card {
+      background: white;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 15px 50px rgba(0, 0, 0, 0.1);
+      border: 1px solid #eaeaea;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    
+    .app-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+    }
+    
+    .panels-container {
+      display: flex;
+      min-height: 500px;
+      position: relative;
+    }
+    
+    .panel {
+      flex: 1;
+      padding: 30px;
+      position: relative;
+    }
+    
+    .panel-left {
+      background: linear-gradient(135deg, #f8f9ff 0%, #f0f3ff 100%);
+      border-right: 1px solid #eaeef5;
+    }
+    
+    .panel-right {
+      background: linear-gradient(135deg, #f9faff 0%, #f1f4ff 100%);
+    }
+    
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 25px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #eaeef5;
+    }
+    
+    .panel-title {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+    
+    .panel-left .panel-title {
+      color: #4a6cf7;
+    }
+    
+    .panel-right .panel-title {
+      color: #8e44ad;
+    }
+    
+    .panel-subtitle {
+      font-size: 1rem;
+      color: #666;
+      background: rgba(74, 108, 247, 0.1);
+      padding: 5px 15px;
+      border-radius: 50px;
+    }
+    
+    .editor-container {
+      height: calc(100% - 65px);
+      position: relative;
+    }
+    
+    pre {
+      height: 100%;
+      margin: 0;
+      padding: 25px;
+      background: white;
+      border-radius: 12px;
+      overflow: auto;
+      border: 1px solid #eaeef5;
+      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.03);
+    }
+    
+    .hljs {
+      background: transparent !important;
+      padding: 0 !important;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    
+    .code-block {
+      position: relative;
+      height: 100%;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.03);
+      border: 1px solid #eaeef5;
+    }
+    
+    .copy-btn {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      border: none;
+      background: white;
+      color: #4a6cf7;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 10;
+      box-shadow: 0 4px 12px rgba(74, 108, 247, 0.15);
+      border: 1px solid rgba(74, 108, 247, 0.2);
+    }
+    
+    .copy-btn:hover {
+      background: #4a6cf7;
+      color: white;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 15px rgba(74, 108, 247, 0.3);
+    }
+    
+    .resizer {
+      width: 5px;
+      background: #dde2ee;
+      cursor: col-resize;
+      transition: background 0.3s;
+      position: relative;
+      z-index: 2;
+    }
+    
+    .resizer:hover {
+      background: #4a6cf7;
+    }
+    
+    .resizer::after {
+      content: "⋮";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #a0aec0;
+      font-size: 20px;
+    }
+    
+    .resizer:hover::after {
+      color: #4a6cf7;
+    }
+    
+    .status-bar {
+      padding: 20px 30px;
+      border-top: 1px solid #eaeef5;
+      display: flex;
+      justify-content: space-between;
+      font-size: 1rem;
+      color: #666;
+      background: #f8f9ff;
+    }
+    
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .info-card {
+      background: linear-gradient(135deg, #f0f3ff 0%, #e6ebff 100%);
+      border-radius: 16px;
+      padding: 25px;
+      margin: 30px;
+      border-left: 4px solid #4a6cf7;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.03);
+    }
+    
+    .info-card h3 {
+      margin-bottom: 15px;
+      color: #4a6cf7;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 1.4rem;
+    }
+    
+    .info-card p {
+      color: #555;
+      line-height: 1.7;
+      font-size: 1.1rem;
+    }
+    
+    .header-icon {
+      display: inline-flex;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #4a6cf7, #8e44ad);
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      color: white;
+      font-size: 28px;
+      box-shadow: 0 5px 15px rgba(74, 108, 247, 0.3);
+    }
+    
+    @media (max-width: 900px) {
+      .panels-container {
+        flex-direction: column;
+      }
+      
+      .panel-left {
+        border-right: none;
+        border-bottom: 1px solid #eaeef5;
+      }
+      
+      .resizer {
+        width: 100%;
+        height: 5px;
+      }
+      
+      .resizer::after {
+        content: "⋯";
+        font-size: 24px;
+      }
+      
+      body {
+        padding: 15px;
+      }
+      
+      .panel {
+        padding: 20px;
+      }
+    }
+    
+    .logo {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    
+    .logo-text {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #4a6cf7;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="container">
+      <div class="logo">
+        <div class="logo-text">代码展示器</div>
+      </div>
+      
+      <header>
+        <h1><i class="fas fa-file-code"></i> YAML与Java代码展示器</h1>
+        <p>左侧展示YAML配置文件，右侧展示对应的Java实现代码 - 白色主题版本</p>
+      </header>
+      
+      <div class="app-card">
+        <div class="info-card">
+          <h3><i class="fas fa-info-circle"></i> 配置说明</h3>
+          <p>此界面展示了用户管理模块的配置与实现。左侧YAML配置文件定义了用户实体的结构，右侧Java代码展示了基于此配置生成的实体类实现。</p>
+        </div>
+        
+        <div class="panels-container">
+          <div class="panel panel-left">
+            <div class="panel-header">
+              <div class="panel-title">
+                <i class="fab fa-yaml"></i> 用户配置
+                <span class="panel-subtitle">YAML格式</span>
+              </div>
+              <div class="status-item">
+                <i class="fas fa-check-circle" style="color: #2ecc71;"></i>
+                <span>配置有效</span>
+              </div>
+            </div>
+            <div class="editor-container">
+              <div class="code-block">
+                <button class="copy-btn" @click="copyYaml">
+                  <i class="fas fa-copy"></i> 复制配置
+                </button>
+                <pre><code class="language-yaml">{{ yamlConfig }}</code></pre>
+              </div>
+            </div>
+          </div>
+          
+          <div class="resizer" @mousedown="startResize"></div>
+          
+          <div class="panel panel-right">
+            <div class="panel-header">
+              <div class="panel-title">
+                <i class="fab fa-java"></i> 用户实体类
+                <span class="panel-subtitle">Java实现</span>
+              </div>
+              <div class="status-item">
+                <i class="fas fa-check-circle" style="color: #2ecc71;"></i>
+                <span>已生成</span>
+              </div>
+            </div>
+            <div class="editor-container">
+              <div class="code-block">
+                <button class="copy-btn" @click="copyJava">
+                  <i class="fas fa-copy"></i> 复制代码
+                </button>
+                <pre><code class="language-java">{{ javaCode }}</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="status-bar">
+          <div class="status-item">
+            <i class="fas fa-code"></i>
+            <span>配置行数: {{ yamlLines }} | 代码行数: {{ javaLines }}</span>
+          </div>
+          <div class="status-item">
+            <i class="fas fa-sync-alt"></i>
+            <span>最后更新: {{ lastUpdate }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    hljs.highlightAll();
+    
+    new Vue({
+      el: '#app',
+      data: {
+        yamlConfig: `# 用户实体配置
+className: "User"
+package: "com.example.model"
+properties:
+  - name: "id"
+    type: "Long"
+    comment: "用户唯一标识"
+    
+  - name: "username"
+    type: "String"
+    comment: "用户名"
+    
+  - name: "email"
+    type: "String"
+    comment: "电子邮箱"
+    
+  - name: "createdAt"
+    type: "Date"
+    comment: "创建时间"
+    
+  - name: "active"
+    type: "boolean"
+    comment: "激活状态"
+    
+  - name: "roles"
+    type: "List<String>"
+    comment: "用户角色列表"
+    
+  - name: "permissions"
+    type: "Set<String>"
+    comment: "用户权限集合"`,
+        
+        javaCode: `package com.example.model;
+
+import java.util.Date;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * 用户实体类
+ * 由YAML配置生成
+ */
+public class User {
+    /** 用户唯一标识 */
+    private Long id;
+    
+    /** 用户名 */
+    private String username;
+    
+    /** 电子邮箱 */
+    private String email;
+    
+    /** 创建时间 */
+    private Date createdAt;
+    
+    /** 激活状态 */
+    private boolean active;
+    
+    /** 用户角色列表 */
+    private List<String> roles;
+    
+    /** 用户权限集合 */
+    private Set<String> permissions;
+
+    public User() {
+    }
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
+    }
+
+    public Date getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(Date createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public boolean isActive() {
+        return active;
+    }
+
+    public void setActive(boolean active) {
+        this.active = active;
+    }
+
+    public List<String> getRoles() {
+        return roles;
+    }
+
+    public void setRoles(List<String> roles) {
+        this.roles = roles;
+    }
+
+    public Set<String> getPermissions() {
+        return permissions;
+    }
+
+    public void setPermissions(Set<String> permissions) {
+        this.permissions = permissions;
+    }
+
+    @Override
+    public String toString() {
+        return "User{" +
+                "id=" + id +
+                ", username='" + username + '\\'' +
+                ", email='" + email + '\\'' +
+                ", createdAt=" + createdAt +
+                ", active=" + active +
+                ", roles=" + roles +
+                ", permissions=" + permissions +
+                '}';
+    }
+}`,
+        lastUpdate: '2023-11-18 10:45:22'
+      },
+      computed: {
+        yamlLines() {
+          return this.yamlConfig.split('\n').length;
+        },
+        javaLines() {
+          return this.javaCode.split('\n').length;
+        }
+      },
+      mounted() {
+        this.$nextTick(() => {
+          document.querySelectorAll('pre code').forEach((block) => {
+            hljs.highlightElement(block);
+          });
+        });
+      },
+      methods: {
+        copyYaml() {
+          this.copyToClipboard(this.yamlConfig, 'YAML配置');
+        },
+        copyJava() {
+          this.copyToClipboard(this.javaCode, 'Java代码');
+        },
+        copyToClipboard(text, type) {
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+          
+          // 创建通知元素
+          const notification = document.createElement('div');
+          notification.innerText = `${type}已复制到剪贴板！`;
+          notification.style.position = 'fixed';
+          notification.style.bottom = '20px';
+          notification.style.right = '20px';
+          notification.style.backgroundColor = '#4a6cf7';
+          notification.style.color = 'white';
+          notification.style.padding = '15px 25px';
+          notification.style.borderRadius = '8px';
+          notification.style.boxShadow = '0 5px 15px rgba(0,0,0,0.2)';
+          notification.style.zIndex = '1000';
+          notification.style.opacity = '0';
+          notification.style.transition = 'opacity 0.3s';
+          
+          document.body.appendChild(notification);
+          
+          // 显示通知
+          setTimeout(() => {
+            notification.style.opacity = '1';
+          }, 10);
+          
+          // 隐藏通知
+          setTimeout(() => {
+            notification.style.opacity = '0';
+            setTimeout(() => {
+              document.body.removeChild(notification);
+            }, 300);
+          }, 2000);
+        },
+        startResize(e) {
+          this.isResizing = true;
+          e.preventDefault();
+        }
+      }
+    });
+  </script>
+</body>
+</html>
