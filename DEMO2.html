@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>高级价格跳动组件</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    }
+    
+    body {
+      background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+      color: #e0e0e0;
+    }
+    
+    .container {
+      max-width: 1200px;
+      width: 100%;
+      padding: 20px;
+    }
+    
+    header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    h1 {
+      color: #fff;
+      font-size: 2.8rem;
+      margin-bottom: 15px;
+      text-shadow: 0 2px 15px rgba(0, 0, 0, 0.4);
+      background: linear-gradient(to right, #00c9ff, #92fe9d);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    
+    .subtitle {
+      color: #a0bcc2;
+      font-size: 1.2rem;
+      max-width: 700px;
+      margin: 0 auto;
+      line-height: 1.7;
+      font-weight: 300;
+    }
+    
+    .dashboard {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 25px;
+      margin-bottom: 30px;
+    }
+    
+    @media (max-width: 768px) {
+      .dashboard {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    .card {
+      background: rgba(20, 30, 48, 0.7);
+      backdrop-filter: blur(12px);
+      border-radius: 20px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    
+    .card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.35);
+    }
+    
+    .card-header {
+      background: rgba(10, 20, 35, 0.6);
+      padding: 20px 25px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    
+    .card-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #ecf0f1;
+      font-size: 1.3rem;
+      font-weight: 600;
+    }
+    
+    .card-title i {
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: rgba(52, 152, 219, 0.2);
+      color: #3498db;
+    }
+    
+    .symbol {
+      background: linear-gradient(to right, #3498db, #2c3e50);
+      color: white;
+      padding: 6px 18px;
+      border-radius: 20px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    
+    .price-container {
+      padding: 30px 25px;
+      position: relative;
+    }
+    
+    .price-value {
+      font-size: 3.8rem;
+      font-weight: 700;
+      transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      position: relative;
+      padding: 10px 0 20px;
+      text-align: center;
+      letter-spacing: 1px;
+    }
+    
+    .price-value.up {
+      color: #00e676;
+      text-shadow: 0 0 15px rgba(0, 230, 118, 0.3);
+    }
+    
+    .price-value.down {
+      color: #ff5252;
+      text-shadow: 0 0 15px rgba(255, 82, 82, 0.3);
+    }
+    
+    .price-meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 15px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    
+    .price-change {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .change-label {
+      color: #95a5a6;
+      font-size: 0.95rem;
+      margin-bottom: 5px;
+    }
+    
+    .change-value {
+      font-weight: 600;
+      font-size: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .change-value.up {
+      color: #00e676;
+    }
+    
+    .change-value.down {
+      color: #ff5252;
+    }
+    
+    .timestamp {
+      color: #95a5a6;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .spread {
+      text-align: center;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 15px;
+      border-radius: 12px;
+      margin: 0 25px 25px;
+    }
+    
+    .spread-value {
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: #3498db;
+      margin-top: 5px;
+    }
+    
+    .controls {
+      display: flex;
+      justify-content: center;
+      gap: 25px;
+      margin: 30px 0 40px;
+    }
+    
+    button {
+      background: linear-gradient(135deg, #00c9ff, #92fe9d);
+      color: #0f2027;
+      border: none;
+      padding: 16px 40px;
+      border-radius: 50px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 6px 20px rgba(0, 201, 255, 0.3);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    button:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 25px rgba(0, 201, 255, 0.4);
+    }
+    
+    button:active {
+      transform: translateY(0);
+    }
+    
+    button.stop {
+      background: linear-gradient(135deg, #ff416c, #ff4b2b);
+      box-shadow: 0 6px 20px rgba(255, 65, 108, 0.3);
+    }
+    
+    button.stop:hover {
+      box-shadow: 0 8px 25px rgba(255, 65, 108, 0.4);
+    }
+    
+    .info-panel {
+      background: rgba(20, 30, 48, 0.7);
+      border-radius: 20px;
+      padding: 30px;
+      margin-top: 30px;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    
+    .info-panel h3 {
+      color: #3498db;
+      font-size: 1.5rem;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .info-content {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 25px;
+    }
+    
+    .info-item {
+      background: rgba(10, 20, 35, 0.4);
+      padding: 20px;
+      border-radius: 15px;
+      border-left: 4px solid #3498db;
+    }
+    
+    .info-item h4 {
+      color: #3498db;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .info-item p {
+      color: #a0bcc2;
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+    
+    .highlight {
+      color: #00e676;
+      font-weight: 600;
+    }
+    
+    .highlight.red {
+      color: #ff5252;
+    }
+    
+    .pulse {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #00e676;
+      box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.7);
+      animation: pulse 1.5s infinite;
+    }
+    
+    .pulse.red {
+      background: #ff5252;
+      box-shadow: 0 0 0 0 rgba(255, 82, 82, 0.7);
+    }
+    
+    @keyframes pulse {
+      0% {
+        transform: scale(0.9);
+        box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.7);
+      }
+      70% {
+        transform: scale(1.1);
+        box-shadow: 0 0 0 12px rgba(0, 230, 118, 0);
+      }
+      100% {
+        transform: scale(0.9);
+        box-shadow: 0 0 0 0 rgba(0, 230, 118, 0);
+      }
+    }
+    
+    .flashing {
+      animation: flash 0.5s;
+    }
+    
+    @keyframes flash {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    
+    footer {
+      text-align: center;
+      margin-top: 40px;
+      color: #5d7c89;
+      font-size: 0.9rem;
+    }
+    
+    .price-label {
+      position: absolute;
+      top: 15px;
+      left: 25px;
+      color: #95a5a6;
+      font-size: 1rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="container">
+    <header>
+      <h1><i class="fas fa-chart-line"></i> 金融价格跳动组件</h1>
+      <p class="subtitle">实时展示买卖价格变动，绿色表示价格上涨，红色表示价格下跌，提供专业的金融数据可视化</p>
+    </header>
+    
+    <main>
+      <div class="dashboard">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <i class="fas fa-shopping-cart"></i>
+              <span>买入价格 (Bid)</span>
+            </div>
+            <div class="symbol">EUR/USD</div>
+          </div>
+          <div class="price-container">
+            <div class="price-label">当前买入价</div>
+            <div class="price-value" :class="bidDirection" :key="bidPrice">
+              {{ formattedBid }}
+            </div>
+            <div class="price-meta">
+              <div class="price-change">
+                <span class="change-label">最新变动</span>
+                <span class="change-value" :class="bidDirection">
+                  <span class="pulse" :class="bidDirection === 'down' ? 'red' : ''"></span>
+                  {{ bidChange > 0 ? '+' : '' }}{{ bidChange.toFixed(4) }}
+                </span>
+              </div>
+              <div class="timestamp">
+                <i class="far fa-clock"></i>
+                {{ lastUpdate }}
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <i class="fas fa-cash-register"></i>
+              <span>卖出价格 (Ask)</span>
+            </div>
+            <div class="symbol">EUR/USD</div>
+          </div>
+          <div class="price-container">
+            <div class="price-label">当前卖出价</div>
+            <div class="price-value" :class="askDirection" :key="askPrice">
+              {{ formattedAsk }}
+            </div>
+            <div class="price-meta">
+              <div class="price-change">
+                <span class="change-label">最新变动</span>
+                <span class="change-value" :class="askDirection">
+                  <span class="pulse" :class="askDirection === 'down' ? 'red' : ''"></span>
+                  {{ askChange > 0 ? '+' : '' }}{{ askChange.toFixed(4) }}
+                </span>
+              </div>
+              <div class="timestamp">
+                <i class="far fa-clock"></i>
+                {{ lastUpdate }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="spread">
+        <div class="change-label">当前点差</div>
+        <div class="spread-value">{{ spread.toFixed(4) }} pips</div>
+      </div>
+      
+      <div class="controls">
+        <button @click="startUpdates">
+          <i class="fas fa-play"></i> 开始价格跳动
+        </button>
+        <button class="stop" @click="stopUpdates">
+          <i class="fas fa-stop"></i> 停止跳动
+        </button>
+      </div>
+      
+      <div class="info-panel">
+        <h3><i class="fas fa-info-circle"></i> 组件说明</h3>
+        <div class="info-content">
+          <div class="info-item">
+            <h4><i class="fas fa-arrow-up"></i> 价格上涨</h4>
+            <p>当价格显示为<span class="highlight">绿色</span>，表示当前价格相比上一次价格上涨。</p>
+          </div>
+          <div class="info-item">
+            <h4><i class="fas fa-arrow-down"></i> 价格下跌</h4>
+            <p>当价格显示为<span class="highlight red">红色</span>，表示当前价格相比上一次价格下跌。</p>
+          </div>
+          <div class="info-item">
+            <h4><i class="fas fa-shopping-cart"></i> 买入价 (Bid)</h4>
+            <p>市场愿意购买该资产的价格，通常是您卖出资产时获得的价格。</p>
+          </div>
+          <div class="info-item">
+            <h4><i class="fas fa-cash-register"></i> 卖出价 (Ask)</h4>
+            <p>市场愿意出售该资产的价格，通常是您购买资产时支付的价格。</p>
+          </div>
+        </div>
+      </div>
+    </main>
+    
+    <footer>
+      <p>© 2023 金融数据可视化组件 | 实时价格跳动系统</p>
+    </footer>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data: {
+        bidPrice: 1.1050,
+        askPrice: 1.1053,
+        bidDirection: '',
+        askDirection: '',
+        bidChange: 0,
+        askChange: 0,
+        updateInterval: null,
+        isUpdating: false,
+        lastUpdate: ''
+      },
+      computed: {
+        formattedBid() {
+          return this.bidPrice.toFixed(4);
+        },
+        formattedAsk() {
+          return this.askPrice.toFixed(4);
+        },
+        spread() {
+          return this.askPrice - this.bidPrice;
+        }
+      },
+      methods: {
+        generateRandomChange() {
+          // 生成更自然的随机变动（80%小幅变动，20%中等变动）
+          const changeType = Math.random() > 0.8 ? 0.0008 : 0.0003;
+          return (Math.random() - 0.5) * changeType * 2;
+        },
+        updatePrices() {
+          // 保存旧价格
+          const oldBid = this.bidPrice;
+          const oldAsk = this.askPrice;
+          
+          // 生成新价格
+          const bidChange = this.generateRandomChange();
+          const askChange = this.generateRandomChange();
+          
+          // 应用变动
+          this.bidPrice += bidChange;
+          this.askPrice += askChange;
+          
+          // 确保卖出价始终高于买入价
+          const minSpread = 0.0002;
+          if (this.askPrice <= this.bidPrice + minSpread) {
+            this.askPrice = this.bidPrice + minSpread + Math.random() * 0.0001;
+          }
+          
+          // 计算变化量
+          this.bidChange = this.bidPrice - oldBid;
+          this.askChange = this.askPrice - oldAsk;
+          
+          // 确定价格方向
+          this.bidDirection = bidChange > 0 ? 'up' : bidChange < 0 ? 'down' : '';
+          this.askDirection = askChange > 0 ? 'up' : askChange < 0 ? 'down' : '';
+          
+          // 更新时间戳
+          this.updateTimestamp();
+        },
+        startUpdates() {
+          if (this.isUpdating) return;
+          
+          this.isUpdating = true;
+          this.updateInterval = setInterval(() => {
+            this.updatePrices();
+          }, 1500); // 稍微减慢更新速度
+        },
+        stopUpdates() {
+          this.isUpdating = false;
+          clearInterval(this.updateInterval);
+          this.bidDirection = '';
+          this.askDirection = '';
+          this.bidChange = 0;
+          this.askChange = 0;
+        },
+        updateTimestamp() {
+          const now = new Date();
+          this.lastUpdate = now.toLocaleTimeString();
+        }
+      },
+      mounted() {
+        // 初始更新
+        this.updatePrices();
+        this.updateTimestamp();
+        // 自动开始
+        this.startUpdates();
+      },
+      beforeDestroy() {
+        this.stopUpdates();
+      }
+    });
+  </script>
+</body>
+</html>

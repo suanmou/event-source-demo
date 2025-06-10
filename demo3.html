@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>配置与Java代码对比界面</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/element-ui/lib/theme-chalk/index.css"
+    />
+    <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github.min.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/default.min.css"
+    />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/yaml.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/java.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: 'Helvetica Neue', Helvetica, 'PingFang SC',
+          'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
+        height: 100vh;
+        overflow: hidden;
+      }
+      .code-comparison-container {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+      .el-header {
+        background-color: #409eff;
+        color: white;
+        padding: 20px;
+      }
+      .el-main {
+        flex: 1;
+        padding: 0;
+        background-color: #f5f7fa;
+      }
+      .el-footer {
+        background-color: #303133;
+        color: white;
+        padding: 10px;
+        text-align: center;
+      }
+      .split-view {
+        display: flex;
+        height: 100%;
+      }
+      .code-panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 15px;
+        border-right: 1px solid #e4e7ed;
+      }
+      .right-panel {
+        border-right: none;
+      }
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .code-content {
+        flex: 1;
+        overflow: auto;
+        border: 1px solid #e4e7ed;
+        border-radius: 4px;
+        padding: 15px;
+        background-color: white;
+        font-family: 'Courier New', Courier, monospace;
+      }
+      .dark-theme {
+        background-color: #282a36;
+        color: #f8f8f2;
+      }
+      h1,
+      h3 {
+        margin: 0;
+      }
+      /* 代码高亮样式 */
+      .hljs {
+        display: block;
+        overflow-x: auto;
+        padding: 0.5em;
+        color: #333;
+        background: #f8f8f8;
+      }
+      .dark-theme .hljs {
+        color: #f8f8f2;
+        background: #282a36;
+      }
+      .hljs-comment,
+      .hljs-quote {
+        color: #998;
+        font-style: italic;
+      }
+      .hljs-keyword,
+      .hljs-selector-tag,
+      .hljs-subst {
+        color: #333;
+        font-weight: bold;
+      }
+      .dark-theme .hljs-keyword,
+      .dark-theme .hljs-selector-tag,
+      .dark-theme .hljs-subst {
+        color: #ff79c6;
+        font-weight: bold;
+      }
+      .hljs-number,
+      .hljs-literal,
+      .hljs-variable,
+      .hljs-template-variable,
+      .hljs-tag .hljs-attr {
+        color: #008080;
+      }
+      .dark-theme .hljs-number,
+      .dark-theme .hljs-literal,
+      .dark-theme .hljs-variable,
+      .dark-theme .hljs-template-variable,
+      .dark-theme .hljs-tag .hljs-attr {
+        color: #bd93f9;
+      }
+      .hljs-string,
+      .hljs-doctag {
+        color: #d14;
+      }
+      .dark-theme .hljs-string,
+      .dark-theme .hljs-doctag {
+        color: #f1fa8c;
+      }
+      .hljs-title,
+      .hljs-section,
+      .hljs-selector-id {
+        color: #900;
+        font-weight: bold;
+      }
+      .dark-theme .hljs-title,
+      .dark-theme .hljs-section,
+      .dark-theme .hljs-selector-id {
+        color: #50fa7b;
+        font-weight: bold;
+      }
+      .hljs-subst {
+        font-weight: normal;
+      }
+      .hljs-type,
+      .hljs-class .hljs-title {
+        color: #458;
+        font-weight: bold;
+      }
+      .dark-theme .hljs-type,
+      .dark-theme .hljs-class .hljs-title {
+        color: #8be9fd;
+        font-weight: bold;
+      }
+      .hljs-tag,
+      .hljs-name,
+      .hljs-attribute {
+        color: #000080;
+        font-weight: normal;
+      }
+      .dark-theme .hljs-tag,
+      .dark-theme .hljs-name,
+      .dark-theme .hljs-attribute {
+        color: #ff79c6;
+        font-weight: normal;
+      }
+      .hljs-regexp,
+      .hljs-link {
+        color: #009926;
+      }
+      .dark-theme .hljs-regexp,
+      .dark-theme .hljs-link {
+        color: #ff5555;
+      }
+      .hljs-symbol,
+      .hljs-bullet {
+        color: #990073;
+      }
+      .dark-theme .hljs-symbol,
+      .dark-theme .hljs-bullet {
+        color: #f1fa8c;
+      }
+      .hljs-built_in,
+      .hljs-builtin-name {
+        color: #0086b3;
+      }
+      .dark-theme .hljs-built_in,
+      .dark-theme .hljs-builtin-name {
+        color: #8be9fd;
+      }
+      .hljs-meta {
+        color: #999;
+        font-weight: bold;
+      }
+      .dark-theme .hljs-meta {
+        color: #bd93f9;
+        font-weight: bold;
+      }
+      .hljs-deletion {
+        background: #fdd;
+      }
+      .dark-theme .hljs-deletion {
+        background: #ff5555;
+      }
+      .hljs-addition {
+        background: #dfd;
+      }
+      .dark-theme .hljs-addition {
+        background: #50fa7b;
+      }
+      .hljs-emphasis {
+        font-style: italic;
+      }
+      .hljs-strong {
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app" class="code-comparison-container">
+      <el-header>
+        <h1>配置与Java代码对比</h1>
+      </el-header>
+
+      <el-main>
+        <div class="split-view">
+          <!-- 左侧配置代码 -->
+          <div class="code-panel left-panel">
+            <div class="panel-header">
+              <h3>配置代码</h3>
+              <el-button size="mini" @click="toggleTheme">
+                {{ darkTheme ? '切换亮色' : '切换暗色' }}
+              </el-button>
+            </div>
+            <div class="code-content" :class="{ 'dark-theme': darkTheme }">
+              <pre><code class="language-yaml">11</code></pre>
+            </div>
+          </div>
+
+          <!-- 右侧Java代码 -->
+          <div class="code-panel right-panel">
+            <div class="panel-header">
+              <h3>Java代码</h3>
+              <el-button size="mini" @click="formatJavaCode">格式化</el-button>
+            </div>
+            <div class="code-content" :class="{ 'dark-theme': darkTheme }">
+              <pre><code class="language-java">{{ javaCode }}</code></pre>
+            </div>
+          </div>
+        </div>
+      </el-main>
+
+      <el-footer>
+        <p>© 2025 代码对比工具 | 版本 1.0.0</p>
+      </el-footer>
+    </div>
+
+    <script>
+      // 初始化highlight.js语言支持
+      hljs.registerLanguage('yaml', hljs.languages.yaml);
+      hljs.registerLanguage('java', hljs.languages.java);
+
+      new Vue({
+        el: '#app',
+        data() {
+          return {
+            darkTheme: false,
+            configCode: `# 应用配置示例
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: demo-application
+  datasource:
+    url: jdbc:mysql://localhost:3306/demo_db
+    username: root
+    password: password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.example: DEBUG
+
+# 缓存配置
+cache:
+  type: redis
+  redis:
+    time-to-live: 3600000 # 1小时`,
+            javaCode: `package com.example.demo;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestTemplate;
+
+@SpringBootApplication
+public class DemoApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(DemoApplication.class, args);
+    }
+    
+    @Bean
+    public RestTemplate restTemplate() {
+        return new RestTemplate();
+    }
+}
+
+@RestController
+class HelloController {
+    
+    @GetMapping("/hello")
+    public String hello() {
+        return "Hello, World!";
+    }
+    
+    @GetMapping("/greet/{name}")
+    public String greet(@PathVariable String name) {
+        return "Hello, " + name + "!";
+    }
+}
+
+@Repository
+public interface UserRepository extends JpaRepository<User, Long> {
+    List<User> findByLastName(String lastName);
+    List<User> findByAgeGreaterThan(int age);
+}
+
+@Service
+public class UserService {
+    
+    private final UserRepository userRepository;
+    
+    @Autowired
+    public UserService(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+    
+    public List<User> getAllUsers() {
+        return userRepository.findAll();
+    }
+    
+    public User getUserById(Long id) {
+        return userRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+    }
+    
+    public User saveUser(User user) {
+        return userRepository.save(user);
+    }
+}`,
+          };
+        },
+        mounted() {
+          this.highlightCode();
+        },
+        methods: {
+          highlightCode() {
+            // 初始化代码高亮
+            document.querySelectorAll('pre code').forEach((block) => {
+              hljs.highlightElement(block);
+            });
+          },
+          toggleTheme() {
+            this.darkTheme = !this.darkTheme;
+            this.highlightCode();
+          },
+          formatJavaCode() {
+            // 简化的Java代码格式化
+            this.javaCode = this.javaCode.replace(/^( +)/gm, (match) =>
+              '  '.repeat(match.length / 2)
+            );
+            this.highlightCode();
+          },
+        },
+        watch: {
+          darkTheme() {
+            this.highlightCode();
+          },
+          configCode() {
+            this.highlightCode();
+          },
+          javaCode() {
+            this.highlightCode();
+          },
+        },
+      });
+    </script>
+  </body>
+</html>
