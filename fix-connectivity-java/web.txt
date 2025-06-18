@@ -1,0 +1,331 @@
+package com.fix.example;
+
+import com.fix.example.config.FixConfigFactory;
+import com.fix.example.session.FixSession;
+import com.fix.example.util.FixMessageConverter;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.TextWebSocketHandler;
+
+import java.io.IOException;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * WebSocket处理器，为每个连接动态创建FIX会话
+ */
+public class FixWebSocketHandler extends TextWebSocketHandler {
+
+    // 存储WebSocket会话ID到FIX会话的映射
+    private final ConcurrentHashMap<String, FixSession> sessionMap = new ConcurrentHashMap<>();
+    
+    // 消息转换器
+    private final FixMessageConverter messageConverter = new FixMessageConverter();
+    
+    // FIX配置工厂
+    private final FixConfigFactory configFactory = new FixConfigFactory();
+
+    @Override
+    public void afterConnectionEstablished(WebSocketSession wsSession) throws Exception {
+        // 从WebSocket会话中获取用户信息（实际应用中可能通过JWT或HTTP头获取）
+        String userId = extractUserId(wsSession);
+        
+        // 为用户创建FIX会话配置
+        SessionSettings fixSettings = configFactory.createSettingsForUser(userId);
+        
+        // 创建FIX会话
+        FixSession fixSession = new FixSession(fixSettings, message -> {
+            try {
+                // 将FIX消息转换为JSON并发送给前端
+                String jsonMessage = messageConverter.convertToJson(message);
+                wsSession.sendMessage(new TextMessage(jsonMessage));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        });
+        
+        // 初始化FIX会话
+        fixSession.initialize();
+        
+        // 保存映射关系
+        sessionMap.put(wsSession.getId(), fixSession);
+        
+        System.out.println("WebSocket连接已建立，用户: " + userId + ", FIX会话ID: " + fixSession.getSessionId());
+    }
+
+    @Override
+    protected void handleTextMessage(WebSocketSession wsSession, TextMessage message) {
+        FixSession fixSession = sessionMap.get(wsSession.getId());
+        
+        if (fixSession != null && fixSession.isConnected()) {
+            try {
+                // 将JSON消息转换为FIX消息
+                quickfix.Message fixMessage = messageConverter.convertToFix(message.getPayload());
+                
+                // 通过FIX会话发送消息
+                fixSession.sendMessage(fixMessage);
+            } catch (Exception e) {
+                try {
+                    wsSession.sendMessage(new TextMessage("{\"error\":\"" + e.getMessage() + "\"}"));
+                } catch (IOException ioException) {
+                    ioException.printStackTrace();
+                }
+            }
+        } else {
+            try {
+                wsSession.sendMessage(new TextMessage("{\"error\":\"FIX会话未连接\"}"));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    @Override
+    public void afterConnectionClosed(WebSocketSession wsSession, CloseStatus status) {
+        FixSession fixSession = sessionMap.remove(wsSession.getId());
+        
+        if (fixSession != null) {
+            // 关闭FIX会话
+            fixSession.disconnect();
+            System.out.println("WebSocket连接已关闭，FIX会话已断开: " + fixSession.getSessionId());
+        }
+    }
+
+    private String extractUserId(WebSocketSession session) {
+        // 实际应用中可能从WebSocket URI、HTTP头或JWT中获取用户ID
+        // 这里使用会话ID作为示例
+        return session.getId();
+    }
+}
+
+
+package com.fix.example.session;
+
+import quickfix.*;
+import java.util.function.Consumer;
+
+/**
+ * 表示一个动态创建的FIX会话
+ */
+public class FixSession implements Application {
+
+    private final SessionID sessionID;
+    private final Initiator initiator;
+    private final Consumer<Message> messageConsumer;
+    private boolean isConnected;
+
+    public FixSession(SessionSettings settings, Consumer<Message> messageConsumer) throws ConfigError {
+        this.messageConsumer = messageConsumer;
+        
+        // 创建并配置FIX会话
+        Application application = this;
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new ScreenLogFactory(true, true, true);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+        
+        initiator = new ThreadedSocketInitiator(
+            application, 
+            storeFactory, 
+            settings, 
+            logFactory, 
+            messageFactory
+        );
+        
+        this.sessionID = initiator.getSessions().get(0);
+        this.isConnected = false;
+    }
+
+    public void initialize() throws ConfigError {
+        initiator.start();
+        this.isConnected = true;
+    }
+
+    public void sendMessage(Message message) {
+        if (isConnected) {
+            try {
+                Session.sendToTarget(message, sessionID);
+            } catch (SessionNotFound e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public void disconnect() {
+        if (initiator != null && initiator.isStarted()) {
+            initiator.stop();
+            isConnected = false;
+        }
+    }
+
+    public boolean isConnected() {
+        return isConnected;
+    }
+
+    public SessionID getSessionId() {
+        return sessionID;
+    }
+
+    // QuickFIX/J Application接口实现
+    @Override
+    public void onCreate(SessionID sessionID) {
+        System.out.println("FIX会话创建: " + sessionID);
+    }
+
+    @Override
+    public void onLogon(SessionID sessionID) {
+        System.out.println("FIX会话登录成功: " + sessionID);
+        this.isConnected = true;
+    }
+
+    @Override
+    public void onLogout(SessionID sessionID) {
+        System.out.println("FIX会话登出: " + sessionID);
+        this.isConnected = false;
+    }
+
+    @Override
+    public void toAdmin(Message message, SessionID sessionID) {
+        // 处理管理消息（如登录、心跳）
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionID) throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
+        // 接收管理消息
+    }
+
+    @Override
+    public void toApp(Message message, SessionID sessionID) throws DoNotSend {
+        // 处理应用消息发送前的逻辑
+    }
+
+    @Override
+    public void fromApp(Message message, SessionID sessionID) throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, UnsupportedMessageType {
+        // 接收应用消息并转发给WebSocket客户端
+        messageConsumer.accept(message);
+    }
+}
+
+package com.fix.example.util;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import quickfix.*;
+
+/**
+ * FIX消息与JSON相互转换
+ */
+public class FixMessageConverter {
+
+    private final Gson gson = new Gson();
+
+    public Message convertToFix(String jsonMessage) throws Exception {
+        JsonObject json = gson.fromJson(jsonMessage, JsonObject.class);
+        
+        // 获取消息类型
+        String msgType = json.get("MsgType").getAsString();
+        
+        // 根据消息类型创建不同的FIX消息
+        Message message;
+        
+        switch (msgType) {
+            case "D": // 新订单
+                message = createNewOrderSingle(json);
+                break;
+            case "V": // 市场数据请求
+                message = createMarketDataRequest(json);
+                break;
+            default:
+                message = new Message();
+                message.getHeader().setField(new MsgType(msgType));
+        }
+        
+        // 添加公共字段
+        message.getHeader().setField(new BeginString("FIX.4.4"));
+        
+        // 添加其他字段
+        for (String key : json.keySet()) {
+            if (!key.equals("MsgType")) {
+                message.setField(new StringField(Integer.parseInt(key), json.get(key).getAsString()));
+            }
+        }
+        
+        return message;
+    }
+
+    public String convertToJson(Message message) {
+        JsonObject json = new JsonObject();
+        
+        // 添加消息类型
+        try {
+            json.addProperty("MsgType", message.getHeader().getString(MsgType.FIELD));
+            
+            // 添加所有字段
+            FieldMap fields = message;
+            for (Object key : fields.keySet()) {
+                int fieldTag = (Integer) key;
+                json.addProperty(String.valueOf(fieldTag), fields.getString(fieldTag));
+            }
+        } catch (FieldNotFound e) {
+            e.printStackTrace();
+        }
+        
+        return gson.toJson(json);
+    }
+
+    private Message createNewOrderSingle(JsonObject json) {
+        NewOrderSingle order = new NewOrderSingle(
+            new ClOrdID(json.get("11").getAsString()),
+            new HandlInst(json.get("21").getAsString().charAt(0)),
+            new Symbol(json.get("55").getAsString()),
+            new Side(json.get("54").getAsString().charAt(0)),
+            new TransactTime()
+        );
+        
+        // 设置订单类型
+        if (json.has("40")) {
+            order.set(new OrdType(json.get("40").getAsString().charAt(0)));
+        }
+        
+        // 设置订单数量
+        if (json.has("38")) {
+            order.set(new OrderQty(json.get("38").getAsDouble()));
+        }
+        
+        return order;
+    }
+
+    private Message createMarketDataRequest(JsonObject json) {
+        MarketDataRequest request = new MarketDataRequest(
+            new MDReqID(json.get("262").getAsString()),
+            new SubscriptionRequestType(json.get("263").getAsString().charAt(0)),
+            new MarketDepth(json.get("264").getAsInt())
+        );
+        
+        // 添加请求的符号
+        MarketDataRequest.NoRelatedSym group = new MarketDataRequest.NoRelatedSym();
+        group.set(new Symbol(json.get("55").getAsString()));
+        request.addGroup(group);
+        
+        return request;
+    }
+}
+
+# fix_base.cfg - 基础配置文件
+[DEFAULT]
+ConnectionType=initiator
+ReconnectInterval=5
+FileStorePath=store
+FileLogPath=log
+UseDataDictionary=Y
+DataDictionary=fix/FIX44.xml
+ResetOnLogon=Y
+
+[SESSION]
+BeginString=FIX.4.4
+TargetCompID=SERVER
+HeartBtInt=30
+SocketConnectHost=localhost
+SocketConnectPort=9876
+ValidateUserDefinedFields=N
+
+

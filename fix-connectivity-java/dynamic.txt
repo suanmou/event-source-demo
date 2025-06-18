@@ -1,0 +1,289 @@
+fix_common.cfg
+
+[DEFAULT]
+ConnectionType=initiator
+ReconnectInterval=5
+FileStorePath=store
+FileLogPath=log
+UseDataDictionary=Y
+DataDictionary=fix/FIX44.xml
+ResetOnLogon=Y
+
+[SESSION]
+BeginString=FIX.4.4
+TargetCompID=SERVER
+HeartBtInt=30
+SocketConnectHost=localhost
+SocketConnectPort=9876
+ValidateUserDefinedFields=Y
+
+
+FixSessionManager 
+
+package com.fix.example;
+
+import com.fix.example.security.JwtUtil;
+import quickfix.*;
+import quickfix.fix44.Logon;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+public class FixSessionManager {
+    private final SessionSettings commonSettings;
+    private final JwtUtil jwtUtil;
+    private final Map<String, FixSession> userSessions = new HashMap<>();
+
+    public FixSessionManager(String commonConfigPath, JwtUtil jwtUtil) throws ConfigError, IOException {
+        this.commonSettings = new SessionSettings(new FileInputStream(commonConfigPath));
+        this.jwtUtil = jwtUtil;
+    }
+
+    /**
+     * 为用户创建FIX会话
+     */
+    public FixSession createUserSession(String userId, String role, String password) throws Exception {
+        // 验证用户并获取JWT
+        String jwtToken = authenticateUser(userId, password, role);
+        
+        // 复制公共配置并添加用户特定设置
+        SessionSettings userSettings = createUserSpecificSettings(userId, jwtToken);
+        
+        // 创建FIX会话
+        FixSession session = new FixSession(userId, role, userSettings, jwtUtil);
+        session.initialize();
+        
+        // 保存会话引用
+        userSessions.put(userId, session);
+        return session;
+    }
+    
+    /**
+     * 验证用户并生成JWT
+     */
+    private String authenticateUser(String userId, String password, String role) {
+        // 实际应用中应调用认证服务
+        if ("admin".equals(role) || "trader".equals(role) || "risk".equals(role)) {
+            return jwtUtil.generateToken(userId, role);
+        }
+        throw new IllegalArgumentException("Invalid role: " + role);
+    }
+    
+    /**
+     * 生成用户特定配置
+     */
+    private SessionSettings createUserSpecificSettings(String userId, String jwtToken) {
+        // 复制公共配置
+        SessionSettings userSettings = new SessionSettings(commonSettings);
+        
+        // 设置用户特定的SenderCompID
+        SessionID sessionID = new SessionID("FIX.4.4", userId, "SERVER");
+        userSettings.setString(sessionID, "SenderCompID", userId);
+        
+        // 为用户创建独立的存储路径
+        userSettings.setString(sessionID, "FileStorePath", "store/" + userId);
+        userSettings.setString(sessionID, "FileLogPath", "log/" + userId);
+        
+        // 示例：根据角色设置不同的心跳间隔
+        if ("admin".equals(jwtUtil.extractRole(jwtToken))) {
+            userSettings.setLong(sessionID, "HeartBtInt", 60);
+        }
+        
+        return userSettings;
+    }
+    
+    /**
+     * 获取用户会话
+     */
+    public FixSession getUserSession(String userId) {
+        return userSessions.get(userId);
+    }
+    
+    /**
+     * 断开用户会话
+     */
+    public void disconnectSession(String userId) {
+        FixSession session = userSessions.remove(userId);
+        if (session != null) {
+            session.disconnect();
+        }
+    }
+    
+    /**
+     * 关闭所有会话
+     */
+    public void shutdown() {
+        userSessions.values().forEach(FixSession::disconnect);
+        userSessions.clear();
+    }
+}
+
+FixSession
+
+package com.fix.example;
+
+import com.fix.example.security.JwtUtil;
+import quickfix.*;
+import quickfix.field.StringField;
+import quickfix.fix44.Logon;
+
+public class FixSession implements Application {
+    private final String userId;
+    private final String role;
+    private final SessionSettings settings;
+    private final JwtUtil jwtUtil;
+    private ThreadedSocketInitiator initiator;
+    private SessionID sessionID;
+    private String jwtToken;
+    private boolean isLoggedOn;
+
+    public FixSession(String userId, String role, SessionSettings settings, JwtUtil jwtUtil) {
+        this.userId = userId;
+        this.role = role;
+        this.settings = settings;
+        this.jwtUtil = jwtUtil;
+        this.isLoggedOn = false;
+    }
+
+    public void initialize() throws ConfigError {
+        Application application = this;
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new ScreenLogFactory(true, true, true);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+        
+        initiator = new ThreadedSocketInitiator(
+            application, storeFactory, settings, logFactory, messageFactory
+        );
+        
+        initiator.start();
+        this.sessionID = initiator.getSessions().get(0);
+    }
+
+    @Override
+    public void toAdmin(Message message, SessionID sessionID) {
+        try {
+            if (message instanceof Logon) {
+                Logon logon = (Logon) message;
+                logon.set(new Username(userId));
+                
+                // 在LOGON消息中添加JWT令牌（自定义字段9999）
+                if (jwtToken != null) {
+                    logon.setField(new StringField(9999, jwtToken));
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionID) 
+            throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
+        // 服务端验证JWT（实际应用中在服务端实现）
+    }
+
+    // 其他Application接口方法...
+    
+    public void setJwtToken(String jwtToken) {
+        this.jwtToken = jwtToken;
+    }
+
+    public void disconnect() {
+        if (initiator != null && initiator.isStarted()) {
+            initiator.stop();
+        }
+    }
+
+    public boolean isConnected() {
+        return initiator != null && initiator.isStarted() && isLoggedOn;
+    }
+}
+
+
+JwtUtil
+
+package com.fix.example.security;
+
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import org.springframework.stereotype.Service;
+
+import java.util.Date;
+
+@Service
+public class JwtUtil {
+    private static final String SECRET_KEY = "fix-jwt-secret-key";
+    private static final int EXPIRATION_HOURS = 10;
+
+    public String generateToken(String username, String role) {
+        return Jwts.builder()
+                .setSubject(username)
+                .claim("role", role)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + EXPIRATION_HOURS * 60 * 60 * 1000))
+                .signWith(SignatureAlgorithm.HS256, SECRET_KEY)
+                .compact();
+    }
+
+    public String extractUsername(String token) {
+        return Jwts.parser().setSigningKey(SECRET_KEY).parseClaimsJws(token).getBody().getSubject();
+    }
+
+    public String extractRole(String token) {
+        return (String) Jwts.parser().setSigningKey(SECRET_KEY).parseClaimsJws(token).getBody().get("role");
+    }
+
+    public boolean validateToken(String token, String username) {
+        String tokenUsername = extractUsername(token);
+        return (tokenUsername.equals(username) && !isTokenExpired(token));
+    }
+
+    private boolean isTokenExpired(String token) {
+        Date expiration = Jwts.parser().setSigningKey(SECRET_KEY).parseClaimsJws(token).getBody().getExpiration();
+        return expiration.before(new Date());
+    }
+}
+
+Main
+
+package com.fix.example;
+
+import com.fix.example.security.JwtUtil;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ConfigurableApplicationContext;
+
+@SpringBootApplication
+public class MainApplication {
+    public static void main(String[] args) throws Exception {
+        ConfigurableApplicationContext context = SpringApplication.run(MainApplication.class, args);
+        
+        JwtUtil jwtUtil = context.getBean(JwtUtil.class);
+        FixSessionManager sessionManager = new FixSessionManager("config/fix_common.cfg", jwtUtil);
+        
+        // 创建用户1会话（交易员角色）
+        FixSession traderSession = sessionManager.createUserSession(
+            "trader001", "trader", "password123"
+        );
+        System.out.println("Trader session created: " + traderSession.isConnected());
+        
+        // 创建用户2会话（管理员角色）
+        FixSession adminSession = sessionManager.createUserSession(
+            "admin001", "admin", "admin123"
+        );
+        System.out.println("Admin session created: " + adminSession.isConnected());
+        
+        // 发送消息示例
+        if (traderSession.isConnected()) {
+            traderSession.sendFixMessage("BUY EUR/USD 100K");
+        }
+        
+        // 关闭会话
+        sessionManager.disconnectSession("trader001");
+        sessionManager.shutdown();
+    }
+}
