@@ -1,0 +1,359 @@
+import quickfix.*;
+import quickfix.fix44.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.net.*;
+import java.io.*;
+
+public class MultiUserFIXClient extends MessageCracker implements Application {
+
+    // 用户会话管理器
+    private final Map<String, UserSessionManager> userManagers = new ConcurrentHashMap<>();
+    private final Map<SessionID, String> sessionToUserMap = new ConcurrentHashMap<>();
+    private final Map<String, SessionID> userToSessionMap = new ConcurrentHashMap<>();
+    
+    // FIX启动器
+    private SocketInitiator initiator;
+
+    @Override
+    public void onCreate(SessionID sessionId) {
+        String username = getUsernameFromConfig(sessionId);
+        sessionToUserMap.put(sessionId, username);
+        userToSessionMap.put(username, sessionId);
+        
+        UserSessionManager manager = userManagers.computeIfAbsent(
+            username, k -> new UserSessionManager(username));
+        
+        System.out.println("会话创建: " + sessionId + " | 用户: " + username);
+    }
+
+    @Override
+    public void onLogon(SessionID sessionId) {
+        String username = sessionToUserMap.get(sessionId);
+        UserSessionManager manager = userManagers.get(username);
+        
+        try {
+            // 获取实际连接使用的IP
+            String connectedIP = getActualConnectionIP(sessionId);
+            System.out.println("用户[" + username + "] 登录成功 | IP: " + connectedIP);
+            
+            // 验证IP是否在白名单内
+            if (manager.getIPManager().isIPAllowed(connectedIP)) {
+                manager.recordSuccessfulLogin(connectedIP);
+            } else {
+                System.err.println("严重错误: 用户[" + username + "] 使用未授权IP: " + connectedIP);
+                // 强制断开连接
+                Session.lookupSession(sessionId).logout("Unauthorized IP");
+            }
+            
+        } catch (Exception e) {
+            System.err.println("IP验证失败: " + e.getMessage());
+        }
+    }
+
+    // 获取实际连接IP（核心方法）
+    private String getActualConnectionIP(SessionID sessionId) {
+        try {
+            // 1. 从会话获取底层Socket连接
+            Session session = Session.lookupSession(sessionId);
+            Socket socket = ((SocketInitiator) initiator).getSettings().getSocket(sessionId);
+            
+            // 2. 获取本地绑定地址
+            if (socket != null) {
+                return socket.getLocalAddress().getHostAddress();
+            }
+            
+            // 3. 备选方法：通过系统网络接口
+            return getPrimaryNetworkIP();
+            
+        } catch (Exception e) {
+            throw new RuntimeException("无法获取连接IP: " + e.getMessage());
+        }
+    }
+    
+    // 获取主网络IP
+    private String getPrimaryNetworkIP() {
+        try (Socket socket = new Socket()) {
+            // 连接到彭博DNS获取出口IP
+            socket.connect(new InetSocketAddress("fixprod.bloomberg.com", 80), 1000);
+            return socket.getLocalAddress().getHostAddress();
+        } catch (IOException e) {
+            throw new RuntimeException("无法确定网络IP: " + e.getMessage());
+        }
+    }
+
+    // 其他回调方法保持不变...
+    
+    // 启动所有用户连接
+    public void startAllSessions() throws ConfigError, RuntimeError {
+        SessionSettings settings = new SessionSettings("fixconfig.cfg");
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new FileLogFactory(settings);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+
+        this.initiator = new SocketInitiator(
+            this, storeFactory, settings, logFactory, messageFactory);
+        
+        initiator.start();
+    }
+    
+    // 为特定用户启动连接
+    public void startUserSession(String username, String selectedIP) 
+            throws ConfigError, RuntimeError {
+        // 1. 验证IP是否在白名单内
+        UserSessionManager manager = userManagers.get(username);
+        if (manager == null || !manager.getIPManager().isIPAllowed(selectedIP)) {
+            throw new RuntimeException("用户[" + username + "] 无权使用IP: " + selectedIP);
+        }
+        
+        // 2. 创建动态会话配置
+        SessionSettings dynamicSettings = createDynamicSessionConfig(username, selectedIP);
+        
+        // 3. 启动会话
+        SessionID sessionId = new SessionID(
+            "FIX.4.4", "CLIENT_" + username, "BLOOMBERG");
+        
+        SessionSettings settings = new SessionSettings(dynamicSettings);
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new FileLogFactory(settings);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+        
+        SocketInitiator userInitiator = new SocketInitiator(
+            this, storeFactory, settings, logFactory, messageFactory);
+        
+        userInitiator.start();
+        System.out.println("用户[" + username + "] 会话已启动 | IP: " + selectedIP);
+    }
+    
+    // 创建动态会话配置
+    private SessionSettings createDynamicSessionConfig(String username, String ip) {
+        Properties props = new Properties();
+        props.setProperty("BeginString", "FIX.4.4");
+        props.setProperty("SenderCompID", "CLIENT_" + username);
+        props.setProperty("TargetCompID", "BLOOMBERG");
+        props.setProperty("SocketConnectHost", ip);
+        props.setProperty("SocketConnectPort", "8228");
+        props.setProperty("Username", username);
+        // 其他必要参数...
+        
+        return new SessionSettings(props);
+    }
+    
+    // 从配置获取用户名
+    private String getUsernameFromConfig(SessionID sessionId) {
+        try {
+            SessionSettings settings = initiator.getSettings();
+            return settings.getString(sessionId, "Username");
+        } catch (Exception e) {
+            return "default_user";
+        }
+    }
+
+    // IP管理器（保持不变）
+    static class UserIPManager {
+        // 实现参考之前的代码
+    }
+    
+    // 用户会话管理器（保持不变）
+    static class UserSessionManager {
+        // 实现参考之前的代码
+    }
+
+    public static void main(String[] args) throws Exception {
+        MultiUserFIXClient client = new MultiUserFIXClient();
+        
+        // 初始化用户白名单
+        client.addUser("trader_john", Arrays.asList("69.191.198.101", "69.191.198.102"));
+        client.addUser("analyst_sarah", Arrays.asList("160.43.172.201", "160.43.172.202"));
+        
+        // 启动所有会话（使用配置文件）
+        client.startAllSessions();
+        
+        // 或者按需启动特定会话
+        client.startUserSession("trader_john", "69.191.198.101");
+        client.startUserSession("analyst_sarah", "160.43.172.201");
+    }
+    
+    // 添加用户
+    public void addUser(String username, List<String> ips) {
+        UserSessionManager manager = new UserSessionManager(username);
+        userManagers.put(username, manager);
+        
+        ips.forEach(ip -> {
+            try {
+                manager.getIPManager().addIP(ip);
+            } catch (Exception e) {
+                System.err.println("添加IP失败: " + e.getMessage());
+            }
+        });
+    }
+}
+
+
+private SessionSettings createDynamicSessionConfig(String username, String ip) {
+    Properties props = new Properties();
+    props.setProperty("SocketConnectHost", ip); // 关键：指定使用的IP
+    props.setProperty("Username", username);
+    // 其他必要参数...
+    return new SessionSettings(props);
+}
+
+
+
+private String getActualConnectionIP(SessionID sessionId) {
+    try {
+        // 从底层Socket获取真实连接IP
+        Socket socket = ((SocketInitiator) initiator).getSettings().getSocket(sessionId);
+        return socket.getLocalAddress().getHostAddress();
+    } catch (Exception e) {
+        // 备选方案
+        return getPrimaryNetworkIP();
+    }
+}
+
+// 启动特定用户的连接
+public void startUserSession(String username, String selectedIP) {
+    // 1. 白名单验证
+    if (!userManagers.get(username).getIPManager().isIPAllowed(selectedIP)) {
+        throw new RuntimeException("未授权IP");
+    }
+    
+    // 2. 动态创建会话
+    SessionSettings settings = createDynamicSessionConfig(username, selectedIP);
+    
+    // 3. 启动连接
+    SocketInitiator userInitiator = new SocketInitiator(...);
+    userInitiator.start();
+}
+
+
+// 用户选择白名单中的IP进行连接
+client.startUserSession("trader_john", "69.191.198.101");
+
+// 输出:
+// 用户[trader_john] 会话已启动 | IP: 69.191.198.101
+// 用户[trader_john] 登录成功 | IP: 69.191.198.101
+
+
+try {
+    client.startUserSession("trader_john", "192.168.1.100");
+} catch (Exception e) {
+    System.out.println(e.getMessage());
+    // 输出: 用户[trader_john] 无权使用IP: 192.168.1.100
+}
+
+
+// 主IP连接失败后切换到灾备IP
+try {
+    client.startUserSession("trader_john", "69.191.198.101");
+} catch (ConnectException e) {
+    System.out.println("主IP连接失败，切换到灾备IP");
+    client.startUserSession("trader_john", "160.43.172.201");
+}
+
+
+public void connectWithFailover(String username) {
+    UserIPManager ipManager = userManagers.get(username).getIPManager();
+    
+    for (String ip : ipManager.getAllowlistedIPs()) {
+        try {
+            startUserSession(username, ip);
+            return; // 连接成功则退出
+        } catch (Exception e) {
+            System.out.println("IP " + ip + " 连接失败: " + e.getMessage());
+        }
+    }
+    throw new RuntimeException("所有IP均连接失败");
+}
+
+
+public String selectOptimalIP(String username) {
+    UserIPManager ipManager = userManagers.get(username).getIPManager();
+    
+    // 1. 优先选择最近成功使用的IP
+    Optional<String> recentIP = ipManager.getMostRecentActiveIP();
+    if (recentIP.isPresent()) return recentIP.get();
+    
+    // 2. 选择延迟最低的IP
+    return ipManager.getIPs().stream()
+        .min(Comparator.comparingInt(this::pingLatency))
+        .orElseThrow();
+}
+
+private int pingLatency(String ip) {
+    // 实现ping测试逻辑
+    return /* 延迟毫秒数 */;
+}
+
+
+public class EnterpriseConsoleIntegration {
+    private final MultiUserFIXClient fixClient;
+    
+    public void synchronizeWithBloombergConsole() {
+        // 从彭博企业控制台获取最新白名单
+        List<BloombergIPRecord> records = BloombergAPI.getAllowlistedIPs();
+        
+        records.forEach(record -> {
+            String user = record.getUsername();
+            String ip = record.getIpAddress();
+            
+            try {
+                fixClient.addIPForUser(user, ip);
+                System.out.println("同步IP: " + user + " - " + ip);
+            } catch (Exception e) {
+                System.err.println("同步失败: " + e.getMessage());
+            }
+        });
+    }
+    
+    // 定时同步（每天凌晨）
+    public void startDailySync() {
+        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+        scheduler.scheduleAtFixedRate(this::synchronizeWithBloombergConsole, 
+            0, 24, TimeUnit.HOURS);
+    }
+}
+
+public void generateIPUsageReport() {
+    userManagers.forEach((user, manager) -> {
+        System.out.println("\n用户: " + user);
+        manager.getIPManager().getIPUsage().forEach((ip, lastUsed) -> {
+            long daysInactive = (System.currentTimeMillis() - lastUsed) / (24*60*60*1000);
+            System.out.printf("  IP: %-15s | 最后使用: %tF | 闲置天数: %d%n", 
+                ip, new Date(lastUsed), daysInactive);
+        });
+    });
+}
+
+
+public void checkCompliance() {
+    final long MAX_INACTIVE_DAYS = 180; // 188天政策
+    
+    userManagers.values().forEach(manager -> {
+        manager.getIPManager().getIPUsage().forEach((ip, lastUsed) -> {
+            long inactiveDays = (System.currentTimeMillis() - lastUsed) / (24*60*60*1000);
+            
+            if (inactiveDays > MAX_INACTIVE_DAYS) {
+                System.err.println("合规违规: 用户[" + manager.getUserId() + 
+                    "] IP " + ip + " 已闲置" + inactiveDays + "天");
+                // 自动发送告警
+                sendComplianceAlert(manager.getUserId(), ip, inactiveDays);
+            }
+        });
+    });
+}
+
+
+public void configureTLSCertificate(String username, String ip) {
+    // 1. 从彭博企业控制台获取证书
+    TLSCertificate cert = BloombergAPI.getCertificate(username, ip);
+    
+    // 2. 配置到FIX会话
+    SessionSettings settings = createDynamicSessionConfig(username, ip);
+    settings.setString("SocketUseSSL", "Y");
+    settings.setString("SSLCertificate", cert.getPath());
+    settings.setString("SSLPassword", cert.getPassword());
+    
+    // 3. 启动安全连接
+    startSecureSession(settings);
+}

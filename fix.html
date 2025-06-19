@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>彭博FIX连接管理系统</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", Arial, sans-serif;
+        }
+        body {
+            background-color: #f5f7fa;
+            color: #333;
+        }
+        .app-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 20px 30px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            display: flex;
+            align-items: center;
+            font-size: 24px;
+            font-weight: 500;
+        }
+        .header h1 i {
+            margin-right: 10px;
+            font-size: 28px;
+        }
+        .dashboard-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+        }
+        .stat-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-size: 24px;
+        }
+        .stat-info h3 {
+            font-size: 14px;
+            color: #909399;
+            margin-bottom: 5px;
+        }
+        .stat-info .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #303133;
+        }
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 25px;
+            box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #ebeef5;
+        }
+        .card-header h2 {
+            font-size: 18px;
+            color: #303133;
+            display: flex;
+            align-items: center;
+        }
+        .card-header h2 i {
+            margin-right: 8px;
+            color: #409EFF;
+        }
+        .user-table {
+            width: 100%;
+        }
+        .ip-tag {
+            margin: 2px;
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+        }
+        .status-connected {
+            background-color: #e1f3d8;
+            color: #67c23a;
+        }
+        .status-disconnected {
+            background-color: #fef0f0;
+            color: #f56c6c;
+        }
+        .status-pending {
+            background-color: #fdf6ec;
+            color: #e6a23c;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px 0;
+            color: #909399;
+            font-size: 14px;
+            border-top: 1px solid #ebeef5;
+        }
+        .ip-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 15px;
+            border: 1px solid #ebeef5;
+            border-radius: 4px;
+            padding: 10px;
+        }
+        .ip-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 10px;
+            border-bottom: 1px solid #ebeef5;
+            align-items: center;
+        }
+        .ip-item:last-child {
+            border-bottom: none;
+        }
+        .ip-actions {
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .ip-item:hover .ip-actions {
+            opacity: 1;
+        }
+        .connection-status {
+            display: flex;
+            align-items: center;
+            margin-top: 15px;
+        }
+        .connection-status span {
+            margin-left: 8px;
+        }
+        .config-form .el-form-item {
+            margin-bottom: 18px;
+        }
+        .bloomberg-blue {
+            color: #1e3c72;
+        }
+        .bloomberg-gradient {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+        }
+        .bloomberg-light-bg {
+            background-color: #f0f7ff;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="app-container">
+            <!-- 头部 -->
+            <div class="header">
+                <h1><i class="el-icon-s-platform"></i> 彭博FIX连接管理系统</h1>
+                <div>
+                    <el-button type="primary" icon="el-icon-user" @click="addUserDialog = true">添加用户</el-button>
+                    <el-button type="success" icon="el-icon-refresh" @click="refreshData">刷新数据</el-button>
+                </div>
+            </div>
+
+            <!-- 统计卡片 -->
+            <div class="dashboard-stats">
+                <div class="stat-card">
+                    <div class="stat-icon bloomberg-gradient">
+                        <i class="el-icon-user"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>用户总数</h3>
+                        <div class="value">{{ stats.totalUsers }}</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon bloomberg-gradient">
+                        <i class="el-icon-connection"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>活跃会话</h3>
+                        <div class="value">{{ stats.activeSessions }}</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon bloomberg-gradient">
+                        <i class="el-icon-s-flag"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>IP白名单总数</h3>
+                        <div class="value">{{ stats.totalIPs }}</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon bloomberg-gradient">
+                        <i class="el-icon-warning-outline"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>即将过期IP</h3>
+                        <div class="value">{{ stats.expiringIPs }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 主内容区 -->
+            <div class="main-content">
+                <!-- 左侧内容 -->
+                <div>
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="el-icon-user"></i> 用户列表</h2>
+                            <el-input 
+                                v-model="searchQuery" 
+                                placeholder="搜索用户..." 
+                                style="width: 300px"
+                                prefix-icon="el-icon-search"
+                                clearable>
+                            </el-input>
+                        </div>
+                        <el-table 
+                            :data="filteredUsers" 
+                            class="user-table"
+                            stripe
+                            style="width: 100%">
+                            <el-table-column prop="username" label="用户名" width="180" sortable>
+                                <template slot-scope="scope">
+                                    <div style="display: flex; align-items: center;">
+                                        <el-avatar :src="scope.row.avatar" size="small"></el-avatar>
+                                        <span style="margin-left: 10px; font-weight: 500;">{{ scope.row.username }}</span>
+                                    </div>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="role" label="角色" width="120">
+                                <template slot-scope="scope">
+                                    <el-tag :type="scope.row.role === '交易员' ? 'primary' : 'success'">
+                                        {{ scope.row.role }}
+                                    </el-tag>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="ips" label="IP白名单">
+                                <template slot-scope="scope">
+                                    <div style="display: flex; flex-wrap: wrap;">
+                                        <el-tag 
+                                            v-for="(ip, index) in scope.row.ips" 
+                                            :key="index"
+                                            class="ip-tag"
+                                            :type="ipStatus(ip, scope.row)"
+                                            closable
+                                            @close="removeIP(scope.row, ip)">
+                                            {{ ip }}
+                                        </el-tag>
+                                        <el-button 
+                                            size="mini" 
+                                            icon="el-icon-plus"
+                                            @click="openAddIPDialog(scope.row)"></el-button>
+                                    </div>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="status" label="连接状态" width="120" align="center">
+                                <template slot-scope="scope">
+                                    <span class="status-badge" :class="{
+                                        'status-connected': scope.row.status === 'connected',
+                                        'status-disconnected': scope.row.status === 'disconnected',
+                                        'status-pending': scope.row.status === 'pending'
+                                    }">
+                                        {{ scope.row.status === 'connected' ? '已连接' : 
+                                           scope.row.status === 'disconnected' ? '未连接' : '连接中' }}
+                                    </span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="操作" width="180" align="center">
+                                <template slot-scope="scope">
+                                    <div class="action-buttons">
+                                        <el-button 
+                                            size="mini" 
+                                            type="primary" 
+                                            icon="el-icon-connection"
+                                            @click="testConnection(scope.row)"
+                                            :disabled="scope.row.status === 'pending'">
+                                            测试
+                                        </el-button>
+                                        <el-button 
+                                            size="mini" 
+                                            type="success" 
+                                            icon="el-icon-edit"
+                                            @click="editUser(scope.row)">
+                                            配置
+                                        </el-button>
+                                        <el-button 
+                                            size="mini" 
+                                            type="danger" 
+                                            icon="el-icon-delete"
+                                            @click="deleteUser(scope.row)">
+                                        </el-button>
+                                    </div>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="el-icon-s-opportunity"></i> 连接状态监控</h2>
+                            <el-button type="text" @click="showAllConnections">查看全部</el-button>
+                        </div>
+                        <div style="height: 300px; background: #f9f9f9; border-radius: 4px; padding: 15px;">
+                            <div v-for="user in activeUsers" :key="user.username" style="margin-bottom: 15px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div style="display: flex; align-items: center;">
+                                        <el-avatar :src="user.avatar" size="small"></el-avatar>
+                                        <span style="margin: 0 10px; font-weight: 500;">{{ user.username }}</span>
+                                        <el-tag size="mini" :type="user.role === '交易员' ? 'primary' : 'success'">
+                                            {{ user.role }}
+                                        </el-tag>
+                                    </div>
+                                    <div>
+                                        <span class="status-badge status-connected" v-if="user.status === 'connected'">
+                                            已连接 {{ user.activeIP }}
+                                        </span>
+                                        <span class="status-badge status-disconnected" v-else-if="user.status === 'disconnected'">
+                                            未连接
+                                        </span>
+                                        <span class="status-badge status-pending" v-else>
+                                            连接中
+                                        </span>
+                                    </div>
+                                </div>
+                                <el-progress 
+                                    :percentage="user.connectionStrength" 
+                                    :color="user.connectionStrength > 80 ? '#67c23a' : user.connectionStrength > 50 ? '#e6a23c' : '#f56c6c'"
+                                    style="margin-top: 8px;"></el-progress>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右侧内容 -->
+                <div>
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="el-icon-ip-location"></i> IP白名单管理</h2>
+                            <el-button 
+                                type="text" 
+                                icon="el-icon-document"
+                                @click="exportIPList">
+                                导出
+                            </el-button>
+                        </div>
+                        <div v-if="selectedUser">
+                            <div style="display: flex; align-items: center; margin-bottom: 15px;">
+                                <el-avatar :src="selectedUser.avatar" size="small"></el-avatar>
+                                <div style="margin-left: 10px;">
+                                    <div style="font-weight: 500;">{{ selectedUser.username }}</div>
+                                    <div style="font-size: 12px; color: #909399;">{{ selectedUser.email }}</div>
+                                </div>
+                            </div>
+                            <div class="ip-list">
+                                <div v-for="(ip, index) in selectedUser.ips" :key="index" class="ip-item">
+                                    <div>
+                                        <span>{{ ip }}</span>
+                                        <el-tag size="mini" style="margin-left: 8px;">
+                                            {{ ipType(ip) }}
+                                        </el-tag>
+                                    </div>
+                                    <div class="ip-actions">
+                                        <el-button 
+                                            size="mini" 
+                                            type="danger" 
+                                            icon="el-icon-delete"
+                                            circle
+                                            @click="removeIP(selectedUser, ip)"></el-button>
+                                    </div>
+                                </div>
+                                <div v-if="selectedUser.ips.length === 0" style="text-align: center; padding: 20px; color: #909399;">
+                                    暂无IP地址，请添加
+                                </div>
+                            </div>
+                            <el-button 
+                                type="primary" 
+                                icon="el-icon-plus" 
+                                style="width: 100%; margin-top: 15px;"
+                                @click="openAddIPDialog(selectedUser)"
+                                :disabled="selectedUser.ips.length >= 30">
+                                添加IP地址 ({{ selectedUser.ips.length }}/30)
+                            </el-button>
+                            <div class="connection-status">
+                                <i class="el-icon-info" style="color: #e6a23c;"></i>
+                                <span>IP地址必须每188天至少使用一次</span>
+                            </div>
+                        </div>
+                        <div v-else style="text-align: center; padding: 30px; color: #909399;">
+                            <i class="el-icon-s-flag" style="font-size: 48px; margin-bottom: 15px; color: #dcdfe6;"></i>
+                            <p>请从左侧选择一个用户来管理IP白名单</p>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="el-icon-setting"></i> FIX会话配置</h2>
+                        </div>
+                        <div v-if="selectedUser">
+                            <el-form label-position="top" class="config-form">
+                                <el-form-item label="目标主机">
+                                    <el-input v-model="selectedUser.config.host" placeholder="fixprod.bloomberg.com">
+                                        <template slot="prepend">https://</template>
+                                    </el-input>
+                                </el-form-item>
+                                <el-form-item label="端口">
+                                    <el-input v-model="selectedUser.config.port" placeholder="8228"></el-input>
+                                </el-form-item>
+                                <el-form-item label="发送方ID">
+                                    <el-input v-model="selectedUser.config.senderId" placeholder="CLIENT_ID"></el-input>
+                                </el-form-item>
+                                <el-form-item label="目标ID">
+                                    <el-input v-model="selectedUser.config.targetId" placeholder="BLOOMBERG"></el-input>
+                                </el-form-item>
+                                <el-form-item label="TLS版本">
+                                    <el-select v-model="selectedUser.config.tlsVersion" style="width: 100%;">
+                                        <el-option label="TLS 1.3" value="1.3"></el-option>
+                                        <el-option label="TLS 1.2" value="1.2"></el-option>
+                                    </el-select>
+                                </el-form-item>
+                                <el-form-item label="证书文件">
+                                    <el-input v-model="selectedUser.config.certFile" placeholder="/path/to/cert.p12">
+                                        <el-button slot="append" icon="el-icon-upload"></el-button>
+                                    </el-input>
+                                </el-form-item>
+                                <el-form-item>
+                                    <el-button type="primary" style="width: 100%;">保存配置</el-button>
+                                </el-form-item>
+                            </el-form>
+                        </div>
+                        <div v-else style="text-align: center; padding: 30px; color: #909399;">
+                            <i class="el-icon-setting" style="font-size: 48px; margin-bottom: 15px; color: #dcdfe6;"></i>
+                            <p>请从左侧选择一个用户来配置FIX会话</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部信息 -->
+            <div class="footer">
+                <p>彭博FIX连接管理系统 &copy; 2023 | 符合彭博安全策略和连接规范</p>
+                <p>版本: v2.1.5 | 最后更新: 2023-10-15</p>
+            </div>
+        </div>
+
+        <!-- 添加用户对话框 -->
+        <el-dialog title="添加新用户" :visible.sync="addUserDialog" width="500px">
+            <el-form :model="newUser" label-width="100px">
+                <el-form-item label="用户名" required>
+                    <el-input v-model="newUser.username" placeholder="请输入用户名"></el-input>
+                </el-form-item>
+                <el-form-item label="邮箱" required>
+                    <el-input v-model="newUser.email" placeholder="请输入邮箱"></el-input>
+                </el-form-item>
+                <el-form-item label="角色" required>
+                    <el-select v-model="newUser.role" placeholder="请选择角色" style="width: 100%;">
+                        <el-option label="交易员" value="交易员"></el-option>
+                        <el-option label="分析师" value="分析师"></el-option>
+                        <el-option label="管理员" value="管理员"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="初始IP">
+                    <el-input v-model="newUser.initialIP" placeholder="可选，添加初始IP地址"></el-input>
+                </el-form-item>
+            </el-form>
+            <span slot="footer" class="dialog-footer">
+                <el-button @click="addUserDialog = false">取 消</el-button>
+                <el-button type="primary" @click="addNewUser">确 定</el-button>
+            </span>
+        </el-dialog>
+
+        <!-- 添加IP对话框 -->
+        <el-dialog :title="'为 ' + (ipUser ? ipUser.username : '') + ' 添加IP地址'" :visible.sync="addIPDialog" width="500px">
+            <el-form :model="newIP" label-width="100px">
+                <el-form-item label="IP地址" required>
+                    <el-input v-model="newIP.address" placeholder="例如: 192.168.1.100"></el-input>
+                </el-form-item>
+                <el-form-item label="类型" required>
+                    <el-select v-model="newIP.type" placeholder="请选择IP类型" style="width: 100%;">
+                        <el-option label="生产环境" value="production"></el-option>
+                        <el-option label="灾备环境" value="backup"></el-option>
+                        <el-option label="测试环境" value="test"></el-option>
+                        <el-option label="开发环境" value="development"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="描述">
+                    <el-input v-model="newIP.description" placeholder="可选描述信息"></el-input>
+                </el-form-item>
+            </el-form>
+            <span slot="footer" class="dialog-footer">
+                <el-button @click="addIPDialog = false">取 消</el-button>
+                <el-button type="primary" @click="addNewIP">确 定</el-button>
+            </span>
+        </el-dialog>
+    </div>
+
+    <script>
+        new Vue({
+            el: '#app',
+            data() {
+                return {
+                    stats: {
+                        totalUsers: 8,
+                        activeSessions: 5,
+                        totalIPs: 24,
+                        expiringIPs: 3
+                    },
+                    users: [
+                        {
+                            id: 1,
+                            username: "john_trader",
+                            avatar: "https://avatars.dicebear.com/api/male/john.svg",
+                            email: "john.trader@example.com",
+                            role: "交易员",
+                            ips: ["69.191.198.101", "69.191.198.102", "160.43.172.201"],
+                            status: "connected",
+                            activeIP: "69.191.198.101",
+                            connectionStrength: 92,
+                            lastConnected: "2023-10-15 09:23:45",
+                            config: {
+                                host: "fixprod.bloomberg.com",
+                                port: "8228",
+                                senderId: "CLIENT_JOHN",
+                                targetId: "BLOOMBERG",
+                                tlsVersion: "1.2",
+                                certFile: "/certs/john_cert.p12"
+                            }
+                        },
+                        {
+                            id: 2,
+                            username: "sarah_analyst",
+                            avatar: "https://avatars.dicebear.com/api/female/sarah.svg",
+                            email: "sarah.analyst@example.com",
+                            role: "分析师",
+                            ips: ["10.0.0.50", "10.0.0.51"],
+                            status: "disconnected",
+                            activeIP: "",
+                            connectionStrength: 0,
+                            lastConnected: "2023-10-14 16:45:22",
+                            config: {
+                                host: "fixprod.bloomberg.com",
+                                port: "8228",
+                                senderId: "CLIENT_SARAH",
+                                targetId: "BLOOMBERG",
+                                tlsVersion: "1.2",
+                                certFile: "/certs/sarah_cert.p12"
+                            }
+                        },
+                        {
+                            id: 3,
+                            username: "mike_admin",
+                            avatar: "https://avatars.dicebear.com/api/male/mike.svg",
+                            email: "mike.admin@example.com",
+                            role: "管理员",
+                            ips: ["192.168.1.100", "192.168.1.101", "192.168.1.102", "10.10.10.50"],
+                            status: "pending",
+                            activeIP: "192.168.1.100",
+                            connectionStrength: 65,
+                            lastConnected: "2023-10-15 10:05:33",
+                            config: {
+                                host: "fixbeta.bloomberg.com",
+                                port: "8228",
+                                senderId: "CLIENT_MIKE",
+                                targetId: "BLOOMBERG",
+                                tlsVersion: "1.3",
+                                certFile: "/certs/mike_cert.p12"
+                            }
+                        },
+                        {
+                            id: 4,
+                            username: "lisa_trader",
+                            avatar: "https://avatars.dicebear.com/api/female/lisa.svg",
+                            email: "lisa.trader@example.com",
+                            role: "交易员",
+                            ips: ["172.16.0.10", "172.16.0.11"],
+                            status: "connected",
+                            activeIP: "172.16.0.10",
+                            connectionStrength: 88,
+                            lastConnected: "2023-10-15 09:45:12",
+                            config: {
+                                host: "fixprod.bloomberg.com",
+                                port: "8228",
+                                senderId: "CLIENT_LISA",
+                                targetId: "BLOOMBERG",
+                                tlsVersion: "1.2",
+                                certFile: "/certs/lisa_cert.p12"
+                            }
+                        }
+                    ],
+                    selectedUser: null,
+                    searchQuery: '',
+                    addUserDialog: false,
+                    addIPDialog: false,
+                    ipUser: null,
+                    newUser: {
+                        username: '',
+                        email: '',
+                        role: '',
+                        initialIP: ''
+                    },
+                    newIP: {
+                        address: '',
+                        type: 'production',
+                        description: ''
+                    }
+                };
+            },
+            computed: {
+                filteredUsers() {
+                    if (!this.searchQuery) return this.users;
+                    return this.users.filter(user => 
+                        user.username.toLowerCase().includes(this.searchQuery.toLowerCase()) ||
+                        user.email.toLowerCase().includes(this.searchQuery.toLowerCase()) ||
+                        user.role.toLowerCase().includes(this.searchQuery.toLowerCase())
+                    );
+                },
+                activeUsers() {
+                    return this.users.filter(user => user.status !== 'disconnected').slice(0, 4);
+                }
+            },
+            mounted() {
+                // 默认选择第一个用户
+                if (this.users.length > 0) {
+                    this.selectedUser = this.users[0];
+                }
+            },
+            methods: {
+                ipStatus(ip, user) {
+                    if (user.activeIP === ip) return 'success';
+                    if (ip.startsWith('69.191') || ip.startsWith('160.43')) return '';
+                    if (ip.startsWith('10.')) return 'info';
+                    if (ip.startsWith('192.168')) return 'warning';
+                    return '';
+                },
+                ipType(ip) {
+                    if (ip.startsWith('69.191') || ip.startsWith('160.43')) return '生产';
+                    if (ip.startsWith('10.')) return '灾备';
+                    if (ip.startsWith('192.168')) return '测试';
+                    return '其他';
+                },
+                testConnection(user) {
+                    this.$message.info(`正在测试 ${user.username} 的连接...`);
+                    user.status = 'pending';
+                    
+                    // 模拟连接测试
+                    setTimeout(() => {
+                        const success = Math.random() > 0.3;
+                        if (success) {
+                            user.status = 'connected';
+                            this.$message.success(`${user.username} 连接测试成功！`);
+                        } else {
+                            user.status = 'disconnected';
+                            this.$message.error(`${user.username} 连接测试失败`);
+                        }
+                    }, 2000);
+                },
+                openAddIPDialog(user) {
+                    this.ipUser = user;
+                    this.newIP = {
+                        address: '',
+                        type: 'production',
+                        description: ''
+                    };
+                    this.addIPDialog = true;
+                },
+                addNewIP() {
+                    if (!this.newIP.address) {
+                        this.$message.warning('请输入IP地址');
+                        return;
+                    }
+                    
+                    if (this.ipUser.ips.length >= 30) {
+                        this.$message.error('每个用户最多只能添加30个IP地址');
+                        return;
+                    }
+                    
+                    if (this.ipUser.ips.includes(this.newIP.address)) {
+                        this.$message.warning('该IP地址已存在');
+                        return;
+                    }
+                    
+                    this.ipUser.ips.push(this.newIP.address);
+                    this.stats.totalIPs++;
+                    this.addIPDialog = false;
+                    this.$message.success('IP地址添加成功');
+                },
+                removeIP(user, ip) {
+                    this.$confirm(`确定要从 ${user.username} 的白名单中移除 ${ip} 吗?`, '提示', {
+                        confirmButtonText: '确定',
+                        cancelButtonText: '取消',
+                        type: 'warning'
+                    }).then(() => {
+                        const index = user.ips.indexOf(ip);
+                        if (index !== -1) {
+                            user.ips.splice(index, 1);
+                            this.stats.totalIPs--;
+                            this.$message.success('IP地址已移除');
+                        }
+                    }).catch(() => {});
+                },
+                addNewUser() {
+                    if (!this.newUser.username || !this.newUser.email || !this.newUser.role) {
+                        this.$message.warning('请填写完整信息');
+                        return;
+                    }
+                    
+                    const newUser = {
+                        id: this.users.length + 1,
+                        username: this.newUser.username,
+                        avatar: `https://avatars.dicebear.com/api/initials/${this.newUser.username}.svg`,
+                        email: this.newUser.email,
+                        role: this.newUser.role,
+                        ips: this.newUser.initialIP ? [this.newUser.initialIP] : [],
+                        status: "disconnected",
+                        activeIP: "",
+                        connectionStrength: 0,
+                        lastConnected: "",
+                        config: {
+                            host: "fixprod.bloomberg.com",
+                            port: "8228",
+                            senderId: `CLIENT_${this.newUser.username.toUpperCase()}`,
+                            targetId: "BLOOMBERG",
+                            tlsVersion: "1.2",
+                            certFile: ""
+                        }
+                    };
+                    
+                    this.users.push(newUser);
+                    this.stats.totalUsers++;
+                    if (this.newUser.initialIP) this.stats.totalIPs++;
+                    
+                    this.addUserDialog = false;
+                    this.newUser = {
+                        username: '',
+                        email: '',
+                        role: '',
+                        initialIP: ''
+                    };
+                    
+                    this.$message.success('用户添加成功');
+                },
+                editUser(user) {
+                    this.selectedUser = user;
+                    this.$message.info(`正在编辑 ${user.username} 的配置`);
+                },
+                deleteUser(user) {
+                    this.$confirm(`确定要删除用户 ${user.username} 吗? 此操作不可恢复。`, '警告', {
+                        confirmButtonText: '确定',
+                        cancelButtonText: '取消',
+                        type: 'error'
+                    }).then(() => {
+                        const index = this.users.indexOf(user);
+                        if (index !== -1) {
+                            this.users.splice(index, 1);
+                            this.stats.totalUsers--;
+                            this.stats.totalIPs -= user.ips.length;
+                            
+                            if (this.selectedUser === user) {
+                                this.selectedUser = this.users.length > 0 ? this.users[0] : null;
+                            }
+                            
+                            this.$message.success('用户已删除');
+                        }
+                    }).catch(() => {});
+                },
+                refreshData() {
+                    this.$message.info('数据刷新中...');
+                    
+                    // 模拟数据刷新
+                    setTimeout(() => {
+                        this.stats.activeSessions = Math.floor(Math.random() * 5) + 3;
+                        this.users.forEach(user => {
+                            if (user.status === 'connected' && Math.random() > 0.7) {
+                                user.status = 'disconnected';
+                            } else if (user.status === 'disconnected' && Math.random() > 0.5) {
+                                user.status = 'connected';
+                            }
+                            
+                            if (user.status === 'connected') {
+                                user.connectionStrength = Math.floor(Math.random() * 30) + 70;
+                            }
+                        });
+                        
+                        this.$message.success('数据已刷新');
+                    }, 1000);
+                },
+                exportIPList() {
+                    this.$message.success('IP列表导出成功');
+                },
+                showAllConnections() {
+                    this.$message.info('显示所有连接状态');
+                }
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,329 @@
+import quickfix.*;
+import quickfix.fix44.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.net.InetAddress;
+
+public class MultiUserFIXClient extends MessageCracker implements Application {
+
+    // 用户会话管理器：用户ID -> 会话管理器
+    private final Map<String, UserSessionManager> userManagers = new ConcurrentHashMap<>();
+    
+    // 会话ID到用户的映射
+    private final Map<SessionID, String> sessionToUserMap = new ConcurrentHashMap<>();
+
+    @Override
+    public void onCreate(SessionID sessionId) {
+        System.out.println("会话创建: " + sessionId);
+        // 在实际应用中，这里需要从配置或数据库获取用户ID
+        String userId = extractUserIdFromSession(sessionId);
+        
+        // 初始化用户会话管理器
+        userManagers.computeIfAbsent(userId, k -> new UserSessionManager(userId));
+        sessionToUserMap.put(sessionId, userId);
+    }
+
+    @Override
+    public void onLogon(SessionID sessionId) {
+        String userId = sessionToUserMap.get(sessionId);
+        UserSessionManager userManager = userManagers.get(userId);
+        
+        System.out.println("用户[" + userId + "] 登录成功: " + sessionId);
+        
+        try {
+            InetAddress localAddress = InetAddress.getLocalHost();
+            String currentIP = localAddress.getHostAddress();
+            
+            // 更新该用户的IP活跃状态
+            userManager.recordSuccessfulLogin(currentIP);
+            System.out.println("用户[" + userId + "] 使用IP: " + currentIP);
+            
+        } catch (Exception e) {
+            System.err.println("IP获取失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void onLogout(SessionID sessionId) {
+        String userId = sessionToUserMap.get(sessionId);
+        System.out.println("用户[" + userId + "] 登出: " + sessionId);
+    }
+
+    // 其他QuickFIX回调方法保持不变...
+    
+    // 用户IP白名单管理器
+    static class UserIPManager {
+        private static final int MAX_IPS_PER_USER = 30;
+        private final String userId;
+        private final Set<String> allowlistedIPs = Collections.newSetFromMap(new ConcurrentHashMap<>());
+        private final Map<String, Long> ipLastLoginMap = new ConcurrentHashMap<>();
+
+        public UserIPManager(String userId) {
+            this.userId = userId;
+        }
+
+        public synchronized void addIP(String ip) throws Exception {
+            if (allowlistedIPs.size() >= MAX_IPS_PER_USER) {
+                throw new Exception("用户[" + userId + "] IP白名单已达上限(30个)，无法添加: " + ip);
+            }
+            if (!allowlistedIPs.contains(ip)) {
+                allowlistedIPs.add(ip);
+                ipLastLoginMap.put(ip, System.currentTimeMillis());
+                System.out.println("用户[" + userId + "] 添加IP: " + ip);
+            }
+        }
+
+        public synchronized void removeIP(String ip) {
+            if (allowlistedIPs.remove(ip)) {
+                ipLastLoginMap.remove(ip);
+                System.out.println("用户[" + userId + "] 移除IP: " + ip);
+            }
+        }
+
+        public void recordSuccessfulLogin(String ip) {
+            if (allowlistedIPs.contains(ip)) {
+                ipLastLoginMap.put(ip, System.currentTimeMillis());
+            } else {
+                System.err.println("用户[" + userId + "] 警告: 未授权IP尝试登录: " + ip);
+            }
+        }
+
+        public Set<String> getAllowlistedIPs() {
+            return new HashSet<>(allowlistedIPs);
+        }
+        
+        public boolean isIPAllowed(String ip) {
+            return allowlistedIPs.contains(ip);
+        }
+    }
+    
+    // 用户会话管理器
+    static class UserSessionManager {
+        private final String userId;
+        private final UserIPManager ipManager;
+        private final Map<SessionID, SessionState> sessionStates = new ConcurrentHashMap<>();
+        private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+
+        public UserSessionManager(String userId) {
+            this.userId = userId;
+            this.ipManager = new UserIPManager(userId);
+            
+            // 启动定时检查任务 (每天执行)
+            scheduler.scheduleAtFixedRate(this::checkIPActivity, 0, 1, TimeUnit.DAYS);
+        }
+        
+        public void addSession(SessionID sessionId) {
+            sessionStates.put(sessionId, new SessionState());
+        }
+        
+        public void removeSession(SessionID sessionId) {
+            sessionStates.remove(sessionId);
+        }
+        
+        public void recordSuccessfulLogin(String ip) {
+            ipManager.recordSuccessfulLogin(ip);
+        }
+        
+        private void checkIPActivity() {
+            final long SIX_MONTHS_MS = 188 * 24 * 60 * 60 * 1000L;
+            final long now = System.currentTimeMillis();
+            
+            for (String ip : ipManager.getAllowlistedIPs()) {
+                Long lastLogin = ipManager.ipLastLoginMap.get(ip);
+                if (lastLogin == null || (now - lastLogin) > SIX_MONTHS_MS) {
+                    System.err.println("用户[" + userId + "] 警告: IP " + ip + " 超过188天未使用!");
+                }
+            }
+        }
+        
+        public UserIPManager getIPManager() {
+            return ipManager;
+        }
+    }
+    
+    // 会话状态跟踪类（保持不变）
+    static class SessionState {
+        private String lastLoginIP;
+        private long lastLoginTime;
+        
+        public String getLastLoginIP() { return lastLoginIP; }
+        public void setLastLoginIP(String ip) { this.lastLoginIP = ip; }
+        public long getLastLoginTime() { return lastLoginTime; }
+        public void setLastLoginTime(long time) { this.lastLoginTime = time; }
+    }
+    
+    // 辅助方法：从会话ID提取用户ID（实际应用中需自定义逻辑）
+    private String extractUserIdFromSession(SessionID sessionId) {
+        // 示例：从TargetCompID中提取用户ID
+        return sessionId.getTargetCompID().split("_")[0];
+    }
+    
+    // 用户管理API
+    public void addIPForUser(String userId, String ip) throws Exception {
+        UserSessionManager manager = userManagers.get(userId);
+        if (manager == null) {
+            manager = new UserSessionManager(userId);
+            userManagers.put(userId, manager);
+        }
+        manager.getIPManager().addIP(ip);
+    }
+    
+    public void removeIPForUser(String userId, String ip) {
+        UserSessionManager manager = userManagers.get(userId);
+        if (manager != null) {
+            manager.getIPManager().removeIP(ip);
+        }
+    }
+    
+    public Set<String> getUserIPs(String userId) {
+        UserSessionManager manager = userManagers.get(userId);
+        return (manager != null) ? manager.getIPManager().getAllowlistedIPs() : Collections.emptySet();
+    }
+
+    // 测试主方法
+    public static void main(String[] args) throws Exception {
+        SessionSettings settings = new SessionSettings("fixconfig.cfg");
+        Application application = new MultiUserFIXClient();
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new FileLogFactory(settings);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+
+        SocketInitiator initiator = new SocketInitiator(
+                application, storeFactory, settings, logFactory, messageFactory);
+        initiator.start();
+        
+        MultiUserFIXClient client = (MultiUserFIXClient) application;
+        
+        // 为不同用户添加IP
+        client.addIPForUser("trader_john", "192.168.1.100");
+        client.addIPForUser("trader_john", "192.168.1.101");
+        
+        client.addIPForUser("analyst_sarah", "10.0.0.50");
+        client.addIPForUser("analyst_sarah", "10.0.0.51");
+        
+        // 模拟用户配额超限
+        try {
+            for (int i = 1; i <= 35; i++) {
+                client.addIPForUser("trader_mike", "172.16.0." + i);
+            }
+        } catch (Exception e) {
+            System.out.println("预期错误: " + e.getMessage());
+        }
+        
+        // 保持程序运行
+        Thread.sleep(Long.MAX_VALUE);
+    }
+}
+
+
+private String extractUserIdFromSession(SessionID sessionId) {
+    // 实际实现根据业务需求定制
+    // 示例1：从TargetCompID提取用户ID
+    return sessionId.getTargetCompID().split("_")[0];
+    
+    // 示例2：从登录消息的Username字段获取
+    // 需要在fromAdmin方法中解析Logon消息
+}
+
+// 添加用户IP
+addIPForUser(String userId, String ip)
+
+// 移除用户IP
+removeIPForUser(String userId, String ip)
+
+// 获取用户IP列表
+getUserIPs(String userId)
+
+
+# 用户1配置
+[SESSION]
+BeginString=FIX.4.4
+SenderCompID=CLIENT1
+TargetCompID=BLOOMBERG
+SocketConnectHost=69.191.198.10
+SocketConnectPort=8228
+Username=trader_john # 添加用户标识字段
+
+# 用户2配置
+[SESSION]
+BeginString=FIX.4.4
+SenderCompID=CLIENT2
+TargetCompID=BLOOMBERG
+SocketConnectHost=69.191.198.11
+SocketConnectPort=8228
+Username=analyst_sarah
+
+
+
+public class UserAdminConsole {
+    private final MultiUserFIXClient fixClient;
+    
+    public UserAdminConsole(MultiUserFIXClient client) {
+        this.fixClient = client;
+    }
+    
+    public void addUserIP(String userId, String ip) {
+        try {
+            fixClient.addIPForUser(userId, ip);
+            System.out.println("成功为用户[" + userId + "]添加IP: " + ip);
+        } catch (Exception e) {
+            System.err.println("添加失败: " + e.getMessage());
+        }
+    }
+    
+    public void showUserIPs(String userId) {
+        Set<String> ips = fixClient.getUserIPs(userId);
+        System.out.println("用户[" + userId + "] IP白名单(" + ips.size() + "/30):");
+        ips.forEach(ip -> System.out.println(" - " + ip));
+    }
+    
+    public void migrateIP(String fromUser, String toUser, String ip) {
+        try {
+            fixClient.removeIPForUser(fromUser, ip);
+            fixClient.addIPForUser(toUser, ip);
+            System.out.println("IP迁移成功: " + ip + " 从[" + fromUser + "]到[" + toUser + "]");
+        } catch (Exception e) {
+            System.err.println("迁移失败: " + e.getMessage());
+        }
+    }
+}
+
+
+
+public void displayUserQuotaDashboard() {
+    System.out.println("\n===== 用户IP配额使用情况 =====");
+    userManagers.forEach((userId, manager) -> {
+        int used = manager.getIPManager().getAllowlistedIPs().size();
+        int remaining = 30 - used;
+        System.out.printf("用户: %-15s 已用: %2d/30 剩余: %2d %s\n",
+                userId, used, remaining,
+                (remaining < 5) ? "⚠️" : "");
+    });
+}
+
+// 定时执行（每小时）
+scheduler.scheduleAtFixedRate(this::displayUserQuotaDashboard, 0, 1, TimeUnit.HOURS);
+
+
+
+public void cleanupInactiveIPs(int maxInactiveDays) {
+    final long threshold = System.currentTimeMillis() - (maxInactiveDays * 24 * 60 * 60 * 1000L);
+    
+    userManagers.forEach((userId, manager) -> {
+        UserIPManager ipManager = manager.getIPManager();
+        Set<String> inactiveIPs = new HashSet<>();
+        
+        ipManager.ipLastLoginMap.forEach((ip, lastLogin) -> {
+            if (lastLogin < threshold) {
+                inactiveIPs.add(ip);
+            }
+        });
+        
+        inactiveIPs.forEach(ip -> {
+            ipManager.removeIP(ip);
+            System.out.println("自动清理: 用户[" + userId + "] IP " + ip);
+        });
+    });
+}
+// 每月执行一次
+scheduler.scheduleAtFixedRate(() -> cleanupInactiveIPs(200), 0, 30, TimeUnit.DAYS);
