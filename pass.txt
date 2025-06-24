@@ -1,0 +1,28 @@
+要完成证书生成和发放，你需要：
+
+创建证书颁发机构 (CA)：
+bash
+keytool -genkeypair -alias bloombergca -keyalg RSA -keysize 4096 -storetype PKCS12 -keystore bloombergca.p12 -validity 3650
+
+
+生成服务器证书：
+bash
+keytool -genkeypair -alias server -keyalg RSA -keysize 4096 -storetype PKCS12 -keystore server.p12 -validity 730
+keytool -certreq -alias server -keystore server.p12 -file server.csr
+keytool -gencert -alias bloombergca -keystore bloombergca.p12 -infile server.csr -outfile server.crt -validity 730
+keytool -importcert -alias bloombergca -keystore server.p12 -file bloombergca.crt -trustcacerts
+keytool -importcert -alias server -keystore server.p12 -file server.crt
+
+
+生成客户端证书：
+bash
+keytool -genkeypair -alias client -keyalg RSA -keysize 4096 -storetype PKCS12 -keystore client.p12 -validity 730
+keytool -certreq -alias client -keystore client.p12 -file client.csr
+keytool -gencert -alias bloombergca -keystore bloombergca.p12 -infile client.csr -outfile client.crt -validity 730
+keytool -importcert -alias bloombergca -keystore client.p12 -file bloombergca.crt -trustcacerts
+keytool -importcert -alias client -keystore client.p12 -file client.crt
+
+
+将证书部署到相应位置：
+服务器证书：quickfix-server/src/main/resources/certs/server.jks
+客户端证书：quickfix-client/src/main/resources/certs/client.jks
