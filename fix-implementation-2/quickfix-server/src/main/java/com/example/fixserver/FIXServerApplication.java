@@ -38,7 +38,7 @@ public class FIXServerApplication implements Application {
         // 重置登录尝试计数
         loginAttempts.remove(sessionID.toString());
     }
-    
+
     @Override
     public void onLogout(SessionID sessionID) {
         System.out.println("Logout received: " + sessionID);
@@ -180,16 +180,34 @@ public class FIXServerApplication implements Application {
     }
     
     private String getClientIP(SessionID sessionID) {
-        try {
-            Socket socket = Session.lookupSession(sessionID).getSocket();
-            if (socket instanceof SSLSocket) {
-                return ((SSLSocket) socket).getInetAddress().getHostAddress();
+         try {
+            // 使用反射获取Session的内部字段
+            java.lang.reflect.Field field = Session.class.getDeclaredField("transport");
+            field.setAccessible(true);
+            
+            // 获取Transport对象
+            Object transport = field.get(Session.lookupSession(sessionId));
+            
+            if (transport instanceof SocketInitiatorTransport) {
+                SocketInitiatorTransport socketTransport = (SocketInitiatorTransport) transport;
+                java.lang.reflect.Field socketField = SocketInitiatorTransport.class.getDeclaredField("socket");
+                socketField.setAccessible(true);
+                java.net.Socket socket = (java.net.Socket) socketField.get(socketTransport);
+                return socket.getInetAddress().getHostAddress();
+            } else if (transport instanceof SocketAcceptorTransport) {
+                SocketAcceptorTransport socketTransport = (SocketAcceptorTransport) transport;
+                java.lang.reflect.Field socketField = SocketAcceptorTransport.class.getDeclaredField("socket");
+                socketField.setAccessible(true);
+                java.net.Socket socket = (java.net.Socket) socketField.get(socketTransport);
+                return socket.getInetAddress().getHostAddress();
             }
-            return socket.getInetAddress().getHostAddress();
         } catch (Exception e) {
-            System.out.println("获取客户端IP地址时发生错误: " + e.getMessage());
+            System.out.println("Error getting client IP: " + e.getMessage());
+            e.printStackTrace();
             return null;
         }
+        
+        return null;
     }
     
     private X509Certificate[] getClientCertificates(SessionID sessionID) {
