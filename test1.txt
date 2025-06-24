@@ -134,13 +134,65 @@ SocketUseSSL=Y
 SocketKeyStore=config/server_keystore.jks
 SocketKeyStorePassword=changeit
 SocketNeedClientAuth=Y
+AllowedIPs=192.168.1.100,10.0.0.0/24,2001:db8::/32
+public class IPValidator {
+    private static final Logger log = LoggerFactory.getLogger(IPValidator.class);
+    private final List<CIDR> allowedCIDRs = new ArrayList<>();
+
+    public IPValidator(String allowedIPsConfig) {
+        for (String entry : allowedIPsConfig.split(",")) {
+            try {
+                allowedCIDRs.add(new CIDR(entry.trim()));
+            } catch (UnknownHostException e) {
+                log.warn("Invalid CIDR entry: {}", entry, e);
+            }
+        }
+    }
+
+    public boolean isAllowed(InetAddress clientIP) {
+        for (CIDR cidr : allowedCIDRs) {
+            if (cidr.contains(clientIP)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static class CIDR {
+        private final Network network;
+
+        public CIDR(String cidr) throws UnknownHostException {
+            String[] parts = cidr.split("/");
+            if (parts.length != 2) {
+                throw new IllegalArgumentException("Invalid CIDR format");
+            }
+            this.network = new Network(
+                InetAddress.getByName(parts[0]),
+                Integer.parseInt(parts[1])
+            );
+        }
+
+        public boolean contains(InetAddress address) {
+            return network.contains(address);
+        }
+    }
+}
 
 
 public class BloombergServerApp implements Application {
     private final Map<SessionID, Instant> sessionActivity = new ConcurrentHashMap<>();
+    private final IPValidator ipValidator;
+
 
     @Override
     public void onCreate(SessionID sessionId) {
+        InetAddress clientIP = ((InetSocketAddress) session.getSocketAddress()).getAddress();
+        if (!ipValidator.isAllowed(clientIP)) {
+        	session.disconnect("IP address not in whitelist");
+            	System.out.println("Rejected connection from: " + clientIP);
+            	return;
+        }
+ 
         System.out.println("New session created: " + sessionId);
         sessionActivity.put(sessionId, Instant.now());
     }
@@ -192,6 +244,13 @@ public class BloombergServerApp implements Application {
     public void fromAdmin(Message message, SessionID sessionId)
             throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
         // 记录客户端证书信息
+   
+        Session session = Session.lookupSession(sessionId);
+        InetAddress clientIP = ((InetSocketAddress) session.getSocketAddress()).getAddress();
+ 
+        if (!ipValidator.isAllowed(clientIP)) {
+            throw new RejectLogon("IP address not authorized");
+        }
         SSLSupport sslSupport = Session.lookupSession(sessionId).getSSLSupport();
         if (sslSupport != null) {
             X509Certificate[] certs = (X509Certificate[]) sslSupport.getPeerCertificateChain();
