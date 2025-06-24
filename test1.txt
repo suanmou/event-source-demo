@@ -1,0 +1,261 @@
+[DEFAULT]
+ConnectionType=initiator
+ReconnectInterval=60
+FileLogPath=logs/client
+FileStorePath=store/client
+
+[SESSION]
+BeginString=FIX.4.4
+SenderCompID=CLIENT123
+TargetCompID=BLOOMBERG
+SocketConnectHost=localhost
+SocketConnectPort=9876
+StartTime=00:00:00
+EndTime=23:59:59
+HeartBtInt=30
+UseDataDictionary=Y
+DataDictionary=spec/FIX44.xml
+
+# TLS配置
+SocketUseSSL=Y
+SocketKeyStore=config/client_keystore.jks
+SocketKeyStorePassword=changeit
+SocketTrustStore=config/bloomberg_truststore.jks
+SocketTrustStorePassword=changeit
+
+
+public class BloombergClientApp implements Application {
+    private SessionID sessionID;
+
+    @Override
+    public void onCreate(SessionID sessionId) {
+        this.sessionID = sessionId;
+        System.out.println("Session created: " + sessionId);
+    }
+
+    @Override
+    public void onLogon(SessionID sessionId) {
+        System.out.println("Logged on to Bloomberg");
+        scheduleHeartbeat(sessionId);
+    }
+
+    private void scheduleHeartbeat(SessionID sessionId) {
+        Session.lookupSession(sessionId).setTargetDefaultHeartBtInt(30);
+        new Timer().scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                try {
+                    Session.sendToTarget(new Heartbeat(), sessionID);
+                } catch (SessionNotFound e) {
+                    e.printStackTrace();
+                }
+            }
+        }, 30_000, 30_000);
+    }
+
+    @Override
+    public void onLogout(SessionID sessionId) {
+        System.out.println("Session logged out");
+    }
+
+    @Override
+    public void toAdmin(Message message, SessionID sessionId) {
+        if (message.getHeader().getField(MsgType.FIELD).equals(MsgType.LOGON)) {
+            try {
+                // 添加自定义登录字段（如用户令牌）
+                message.setField(new StringField(9999, "BLOOMBERG_USER_TOKEN"));
+            } catch (FieldNotFound e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionId)
+            throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
+        // 验证服务器证书
+        SSLSupport sslSupport = Session.lookupSession(sessionId).getSSLSupport();
+        if (sslSupport != null) {
+            X509Certificate[] certs = (X509Certificate[]) sslSupport.getPeerCertificateChain();
+            if (!validateBloombergCert(certs)) {
+                throw new RejectLogon("Invalid Bloomberg certificate");
+            }
+        }
+    }
+
+    private boolean validateBloombergCert(X509Certificate[] certs) {
+        // 实现Bloomberg根证书验证逻辑
+        return certs != null && certs.length > 0 
+               && "CN=Bloomberg CA".equals(certs[0].getSubjectX500Principal().getName());
+    }
+
+    // 其他方法实现（fromApp/toApp）...
+}
+
+
+public class ClientLauncher {
+    public static void main(String[] args) throws Exception {
+        SessionSettings settings = new SessionSettings(new FileInputStream("config/client.cfg"));
+        Application app = new BloombergClientApp();
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new FileLogFactory(settings);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+
+        Initiator initiator = new SocketInitiator(app, storeFactory, settings, logFactory, messageFactory);
+        initiator.start();
+
+        // 保持主线程运行
+        synchronized (ClientLauncher.class) {
+            ClientLauncher.class.wait();
+        }
+    }
+}
+
+[DEFAULT]
+ConnectionType=acceptor
+StoreMessages=Y
+FileLogPath=logs/server
+FileStorePath=store/server
+
+[SESSION]
+BeginString=FIX.4.4
+SenderCompID=BLOOMBERG
+TargetCompID=CLIENT123
+SocketAcceptHost=0.0.0.0
+SocketAcceptPort=9876
+StartTime=00:00:00
+EndTime=23:59:59
+HeartBtInt=30
+UseDataDictionary=Y
+DataDictionary=spec/FIX44.xml
+
+# TLS配置
+SocketUseSSL=Y
+SocketKeyStore=config/server_keystore.jks
+SocketKeyStorePassword=changeit
+SocketNeedClientAuth=Y
+
+
+public class BloombergServerApp implements Application {
+    private final Map<SessionID, Instant> sessionActivity = new ConcurrentHashMap<>();
+
+    @Override
+    public void onCreate(SessionID sessionId) {
+        System.out.println("New session created: " + sessionId);
+        sessionActivity.put(sessionId, Instant.now());
+    }
+
+    @Override
+    public void onLogon(SessionID sessionId) {
+        System.out.println("Client logged on: " + sessionId);
+        scheduleSessionCheck(sessionId);
+    }
+
+    private void scheduleSessionCheck(SessionID sessionId) {
+        new Timer().scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                if (Instant.now().isAfter(sessionActivity.get(sessionId).plusSeconds(180))) {
+                    Session.lookupSession(sessionId).disconnect("Inactivity timeout");
+                }
+            }
+        }, 30_000, 30_000);
+    }
+
+    @Override
+    public void onLogout(SessionID sessionId) {
+        System.out.println("Client logged out: " + sessionId);
+        sessionActivity.remove(sessionId);
+    }
+
+    @Override
+    public void toAdmin(Message message, SessionID sessionId) {
+        // 验证客户端登录请求
+        if (message.getHeader().getField(MsgType.FIELD).equals(MsgType.LOGON)) {
+            try {
+                String userToken = message.getHeader().getString(9999);
+                if (!validateUserToken(userToken)) {
+                    throw new RejectLogon("Invalid user token");
+                }
+            } catch (FieldNotFound e) {
+                throw new RejectLogon("Missing user token");
+            }
+        }
+    }
+
+    private boolean validateUserToken(String token) {
+        // 实现Bloomberg SSO集成验证
+        return token != null && token.startsWith("BLOOMBERG_");
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionId)
+            throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
+        // 记录客户端证书信息
+        SSLSupport sslSupport = Session.lookupSession(sessionId).getSSLSupport();
+        if (sslSupport != null) {
+            X509Certificate[] certs = (X509Certificate[]) sslSupport.getPeerCertificateChain();
+            if (certs == null || certs.length == 0) {
+                throw new RejectLogon("No client certificate provided");
+            }
+        }
+    }
+
+    @Override
+    public void toApp(Message message, SessionID sessionId) throws DoNotSend {
+        // 记录出站消息时间
+        sessionActivity.put(sessionId, Instant.now());
+    }
+
+    @Override
+    public void fromApp(Message message, SessionID sessionId)
+            throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, UnsupportedMessageType {
+        // 记录入站消息时间并验证序列号
+        sessionActivity.put(sessionId, Instant.now());
+        validateSequenceNumber(message, sessionId);
+    }
+
+    private void validateSequenceNumber(Message message, SessionID sessionId) {
+        try {
+            long expected = Session.lookupSession(sessionId).getNextSenderMsgSeqNum();
+            long actual = message.getHeader().getLong(MsgSeqNum.FIELD);
+            if (actual != expected) {
+                throw new InvalidMessage("Sequence number mismatch", 
+                    SessionRejectReason.INVALID_MSG_SEQ_NUM);
+            }
+        } catch (FieldNotFound e) {
+            throw new InvalidMessage("Missing MsgSeqNum", 
+                SessionRejectReason.REQUIRED_TAG_MISSING);
+        }
+    }
+}
+
+
+public class ServerLauncher {
+    public static void main(String[] args) throws Exception {
+        SessionSettings settings = new SessionSettings(new FileInputStream("config/server.cfg"));
+        Application app = new BloombergServerApp();
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new FileLogFactory(settings);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+
+        Acceptor acceptor = new SocketAcceptor(app, storeFactory, settings, logFactory, messageFactory);
+        acceptor.start();
+
+        // 保持主线程运行
+        synchronized (ServerLauncher.class) {
+            ServerLauncher.class.wait();
+        }
+    }
+}
+
+# 生成Bloomberg CA证书
+keytool -genkeypair -alias bloomberg_ca -keyalg RSA -keystore bloomberg_ca.jks
+
+# 生成服务端证书并由CA签名
+keytool -genkeypair -alias server -keyalg RSA -keystore server_keystore.jks
+keytool -certreq -alias server -file server.csr -keystore server_keystore.jks
+keytool -gencert -alias bloomberg_ca -infile server.csr -outfile server.crt -keystore bloomberg_ca.jks
+keytool -importcert -alias server_cert -file server.crt -keystore server_keystore.jks
+
+# 生成客户端证书（相同流程）
