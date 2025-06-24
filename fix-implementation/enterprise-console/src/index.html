@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bloomberg FIX Enterprise Console</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.7.14/dist/vue.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-ui@2.15.13/lib/theme-chalk/index.css">
+  <script src="https://cdn.jsdelivr.net/npm/element-ui@2.15.13/lib/index.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#0066B3',
+            secondary: '#1A2B49',
+            accent: '#FFC800',
+            dark: '#0F172A',
+            light: '#F8FAFC'
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+          },
+        },
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .content-auto {
+        content-visibility: auto;
+      }
+      .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans">
+  <div id="app">
+    <!-- 顶部导航栏 -->
+    <header class="bg-primary text-white shadow-md">
+      <div class="container mx-auto px-4 py-3 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <i class="fa fa-bank text-2xl"></i>
+          <h1 class="text-xl font-bold">Bloomberg FIX Enterprise Console</h1>
+        </div>
+        <div class="flex items-center space-x-4">
+          <el-dropdown trigger="click">
+            <span class="flex items-center cursor-pointer">
+              <i class="fa fa-user-circle-o mr-2"></i>
+              <span>Admin User</span>
+              <i class="fa fa-caret-down ml-2"></i>
+            </span>
+            <el-dropdown-menu slot="dropdown">
+              <el-dropdown-item>
+                <i class="fa fa-user-o mr-2"></i>Profile
+              </el-dropdown-item>
+              <el-dropdown-item>
+                <i class="fa fa-cog mr-2"></i>Settings
+              </el-dropdown-item>
+              <el-dropdown-item>
+                <i class="fa fa-sign-out mr-2"></i>Logout
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </el-dropdown>
+        </div>
+      </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <div class="flex h-[calc(100vh-64px)]">
+      <!-- 侧边栏 -->
+      <aside class="w-64 bg-secondary text-white shadow-lg flex-shrink-0">
+        <nav class="p-4">
+          <ul class="space-y-2">
+            <li>
+              <router-link to="/dashboard" class="flex items-center p-3 rounded-lg hover:bg-primary transition-colors">
+                <i class="fa fa-dashboard w-6"></i>
+                <span>Dashboard</span>
+              </router-link>
+            </li>
+            <li>
+              <router-link to="/sessions" class="flex items-center p-3 rounded-lg hover:bg-primary transition-colors">
+                <i class="fa fa-exchange w-6"></i>
+                <span>FIX Sessions</span>
+              </router-link>
+            </li>
+            <li>
+              <router-link to="/ip-whitelist" class="flex items-center p-3 rounded-lg hover:bg-primary transition-colors">
+                <i class="fa fa-shield w-6"></i>
+                <span>IP Whitelist</span>
+              </router-link>
+            </li>
+            <li>
+              <router-link to="/certificates" class="flex items-center p-3 rounded-lg hover:bg-primary transition-colors">
+                <i class="fa fa-certificate w-6"></i>
+                <span>TLS Certificates</span>
+              </router-link>
+            </li>
+            <li>
+              <router-link to="/users" class="flex items-center p-3 rounded-lg hover:bg-primary transition-colors">
+                <i class="fa fa-users w-6"></i>
+                <span>Users</span>
+              </router-link>
+            </li>
+            <li>
+              <router-link to="/logs" class="flex items-center p-3 rounded-lg hover:bg-primary transition-colors">
+                <i class="fa fa-file-text w-6"></i>
+                <span>Logs</span>
+              </router-link>
+            </li>
+            <li>
+              <router-link to="/settings" class="flex items-center p-3 rounded-lg hover:bg-primary transition-colors">
+                <i class="fa fa-cog w-6"></i>
+                <span>Settings</span>
+              </router-link>
+            </li>
+          </ul>
+        </nav>
+      </aside>
+
+      <!-- 主要内容 -->
+      <main class="flex-1 overflow-auto p-6 bg-gray-50">
+        <router-view></router-view>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    // 路由配置
+    const routes = [
+      { path: '/dashboard', component: {
+        template: `
+          <div class="container mx-auto">
+            <h2 class="text-2xl font-bold mb-6">Dashboard</h2>
+            
+            <!-- 统计卡片 -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+              <el-card class="bg-white shadow-md hover:shadow-lg transition-shadow">
+                <div class="flex items-center">
+                  <div class="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mr-4">
+                    <i class="fa fa-exchange text-primary text-xl"></i>
+                  </div>
+                  <div>
+                    <p class="text-gray-500 text-sm">Active Sessions</p>
+                    <h3 class="text-2xl font-bold">12</h3>
+                  </div>
+                </div>
+              </el-card>
+              
+              <el-card class="bg-white shadow-md hover:shadow-lg transition-shadow">
+                <div class="flex items-center">
+                  <div class="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center mr-4">
+                    <i class="fa fa-shield text-green-600 text-xl"></i>
+                  </div>
+                  <div>
+                    <p class="text-gray-500 text-sm">Whitelisted IPs</p>
+                    <h3 class="text-2xl font-bold">24</h3>
+                  </div>
+                </div>
+              </el-card>
+              
+              <el-card class="bg-white shadow-md hover:shadow-lg transition-shadow">
+                <div class="flex items-center">
+                  <div class="w-12 h-12 rounded-full bg-yellow-100 flex items-center justify-center mr-4">
+                    <i class="fa fa-certificate text-yellow-600 text-xl"></i>
+                  </div>
+                  <div>
+                    <p class="text-gray-500 text-sm">Active Certificates</p>
+                    <h3 class="text-2xl font-bold">18</h3>
+                  </div>
+                </div>
+              </el-card>
+              
+              <el-card class="bg-white shadow-md hover:shadow-lg transition-shadow">
+                <div class="flex items-center">
+                  <div class="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mr-4">
+                    <i class="fa fa-exclamation-triangle text-red-600 text-xl"></i>
+                  </div>
+                  <div>
+                    <p class="text-gray-500 text-sm">Warnings</p>
+                    <h3 class="text-2xl font-bold">3</h3>
+                  </div>
+                </div>
+              </el-card>
+            </div>
+            
+            <!-- 会话状态图表 -->
+            <el-card class="bg-white shadow-md mb-8 p-6">
+              <h3 class="text-xl font-bold mb-4">Session Status Overview</h3>
+              <div class="h-80">
+                <!-- 这里会渲染图表 -->
+                <div class="flex items-center justify-center h-full">
+                  <i class="fa fa-bar-chart text-6xl text-gray-300"></i>
+                </div>
+              </div>
+            </el-card>
+            
+            <!-- 最近活动 -->
+            <el-card class="bg-white shadow-md p-6">
+              <h3 class="text-xl font-bold mb-4">Recent Activity</h3>
+              <el-table :data="recentActivity" border>
+                <el-table-column prop="timestamp" label="Time" width="180">
+                  <template slot-scope="scope">
+                    {{ scope.row.timestamp }}
+                  </template>
+                </el-table-column>
+                <el-table-column prop="action" label="Action" width="200"></el-table-column>
+                <el-table-column prop="details" label="Details"></el-table-column>
+                <el-table-column prop="user" label="User" width="150"></el-table-column>
+              </el-table>
+            </el-card>
+          </div>
+        `,
+        data() {
+          return {
+            recentActivity: [
+              {
+                timestamp: '2023-06-15 14:32:45',
+                action: 'Session Connected',
+                details: 'Session ID: FIX.4.4:SENDER:RECEIVER',
+                user: 'admin'
+              },
+              {
+                timestamp: '2023-06-15 13:45:12',
+                action: 'IP Added to Whitelist',
+                details: 'IP: 192.168.1.100',
+                user: 'admin'
+              },
+              {
+                timestamp: '2023-06-15 12:18:33',
+                action: 'Certificate Generated',
+                details: 'Session ID: FIX.4.4:SENDER2:RECEIVER2',
+                user: 'operator'
+              },
+              {
+                timestamp: '2023-06-15 10:05:22',
+                action: 'Session Disconnected',
+                details: 'Session ID: FIX.4.4:SENDER3:RECEIVER3',
+                user: 'system'
+              },
+              {
+                timestamp: '2023-06-14 18:42:10',
+                action: 'User Added',
+                details: 'User: new_operator',
+                user: 'admin'
+              }
+            ]
+          }
+        }
+      }},
+      { path: '/sessions', component: {
+        template: `
+          <div class="container mx-auto">
+            <div class="flex justify-between items-center mb-6">
+              <h2 class="text-2xl font-bold">FIX Sessions</h2>
+              <el-button type="primary" @click="openAddSessionDialog">
+                <i class="fa fa-plus mr-2"></i>Add Session
+              </el-button>
+            </div>
+            
+            <el-card class="bg-white shadow-md p-6">
+              <div class="flex justify-between items-center mb-4">
+                <el-input v-model="searchQuery" placeholder="Search sessions..." class="w-1/3">
+                  <i slot="suffix" class="fa fa-search"></i>
+                </el-input>
+                <el-select v-model="statusFilter" placeholder="Filter by status">
+                  <el-option label="All" value="all"></el-option>
+                  <el-option label="Connected" value="connected"></el-option>
+                  <el-option label="Disconnected" value="disconnected"></el-option>
+                </el-select>
+              </div>
+              
+              <el-table :data="filteredSessions" border>
+                <el-table-column prop="sessionId" label="Session ID" width="220"></el-table-column>
+                <el-table-column prop="ipAddress" label="IP Address" width="150"></el-table-column>
+                <el-table-column prop="status" label="Status" width="120">
+                  <template slot-scope="scope">
+                    <el-tag :type="scope.row.status === 'connected' ? 'success' : 'danger'">
+                      {{ scope.row.status === 'connected' ? 'Connected' : 'Disconnected' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="lastActivity" label="Last Activity" width="180"></el-table-column>
+                <el-table-column prop="certificateStatus" label="Certificate" width="150">
+                  <template slot-scope="scope">
+                    <el-tag :type="scope.row.certificateStatus === 'valid' ? 'success' : 'warning'">
+                      {{ scope.row.certificateStatus === 'valid' ? 'Valid' : 'Expiring Soon' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Actions" width="200">
+                  <template slot-scope="scope">
+                    <el-button type="text" size="small" @click="viewSessionDetails(scope.row)">
+                      <i class="fa fa-eye mr-1"></i> View
+                    </el-button>
+                    <el-button type="text" size="small" :disabled="scope.row.status !== 'disconnected'" @click="connectSession(scope.row)">
+                      <i class="fa fa-plug mr-1"></i> Connect
+                    </el-button>
+                    <el-button type="text" size="small" :disabled="scope.row.status !== 'connected'" @click="disconnectSession(scope.row)">
+                      <i class="fa fa-power-off mr-1"></i> Disconnect
+                    </el-button>
+                    <el-button type="text" size="small" @click="renewCertificate(scope.row)">
+                      <i class="fa fa-refresh mr-1"></i> Renew Cert
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              
+              <div class="flex justify-center mt-6">
+                <el-pagination
+                  @size-change="handleSizeChange"
+                  @current-change="handleCurrentChange"
+                  :current-page="currentPage"
+                  :page-sizes="[10, 20, 50]"
+                  :page-size="pageSize"
+                  layout="total, sizes, prev, pager, next, jumper"
+                  :total="sessions.length">
+                </el-pagination>
+              </div>
+            </el-card>
+            
+            <!-- 添加会话对话框 -->
+            <el-dialog title="Add New FIX Session" :visible.sync="addSessionDialogVisible" width="50%">
+              <el-form :model="newSession" :rules="sessionRules" ref="addSessionForm">
+                <el-form-item label="Begin String" prop="beginString">
+                  <el-input v-model="newSession.beginString"></el-input>
+                </el-form-item>
+                <el-form-item label="Sender Comp ID" prop="senderCompID">
+                  <el-input v-model="newSession.senderCompID"></el-input>
+                </el-form-item>
+                <el-form-item label="Target Comp ID" prop="targetCompID">
+                  <el-input v-model="newSession.targetCompID"></el-input>
+                </el-form-item>
+                <el-form-item label="Host" prop="host">
+                  <el-input v-model="newSession.host"></el-input>
+                </el-form-item>
+                <el-form-item label="Port" prop="port">
+                  <el-input v-model.number="newSession.port" type="number"></el-input>
+                </el-form-item>
+                <el-form-item label="IP Address" prop="ipAddress">
+                  <el-input v-model="newSession.ipAddress"></el-input>
+                </el-form-item>
+              </el-form>
+              <div slot="footer" class="dialog-footer">
+                <el-button @click="addSessionDialogVisible = false">Cancel</el-button>
+                <el-button type="primary" @click="addNewSession">Save</el-button>
+              </div>
+            </el-dialog>
+          </div>
+        `,
+        data() {
+          return {
+            sessions: [
+              {
+                sessionId: 'FIX.4.4:SENDER1:RECEIVER1',
+                ipAddress: '192.168.1.10',
+                status: 'connected',
+                lastActivity: '2023-06-15 14:32:45',
+                certificateStatus: 'valid'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER2:RECEIVER2',
+                ipAddress: '192.168.1.11',
+                status: 'disconnected',
+                lastActivity: '2023-06-15 10:15:30',
+                certificateStatus: 'valid'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER3:RECEIVER3',
+                ipAddress: '192.168.1.12',
+                status: 'connected',
+                lastActivity: '2023-06-15 13:42:18',
+                certificateStatus: 'expiring soon'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER4:RECEIVER4',
+                ipAddress: '192.168.1.13',
+                status: 'disconnected',
+                lastActivity: '2023-06-14 16:25:47',
+                certificateStatus: 'valid'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER5:RECEIVER5',
+                ipAddress: '192.168.1.14',
+                status: 'connected',
+                lastActivity: '2023-06-15 14:05:12',
+                certificateStatus: 'valid'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER6:RECEIVER6',
+                ipAddress: '192.168.1.15',
+                status: 'disconnected',
+                lastActivity: '2023-06-15 09:30:15',
+                certificateStatus: 'expiring soon'
+              }
+            ],
+            searchQuery: '',
+            statusFilter: 'all',
+            pageSize: 10,
+            currentPage: 1,
+            addSessionDialogVisible: false,
+            newSession: {
+              beginString: 'FIX.4.4',
+              senderCompID: '',
+              targetCompID: '',
+              host: 'localhost',
+              port: 9876,
+              ipAddress: ''
+            },
+            sessionRules: {
+              senderCompID: [
+                { required: true, message: 'Please enter Sender Comp ID', trigger: 'blur' }
+              ],
+              targetCompID: [
+                { required: true, message: 'Please enter Target Comp ID', trigger: 'blur' }
+              ],
+              ipAddress: [
+                { required: true, message: 'Please enter IP Address', trigger: 'blur' },
+                { pattern: /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/, message: 'Please enter a valid IP address', trigger: 'blur' }
+              ]
+            }
+          }
+        },
+        computed: {
+          filteredSessions() {
+            return this.sessions
+              .filter(session => {
+                if (this.statusFilter === 'all') return true;
+                return session.status === this.statusFilter;
+              })
+              .filter(session => {
+                if (!this.searchQuery) return true;
+                const query = this.searchQuery.toLowerCase();
+                return session.sessionId.toLowerCase().includes(query) ||
+                       session.ipAddress.toLowerCase().includes(query);
+              })
+              .slice((this.currentPage - 1) * this.pageSize, this.currentPage * this.pageSize);
+          }
+        },
+        methods: {
+          handleSizeChange(size) {
+            this.pageSize = size;
+          },
+          handleCurrentChange(page) {
+            this.currentPage = page;
+          },
+          openAddSessionDialog() {
+            this.newSession = {
+              beginString: 'FIX.4.4',
+              senderCompID: '',
+              targetCompID: '',
+              host: 'localhost',
+              port: 9876,
+              ipAddress: ''
+            };
+            this.addSessionDialogVisible = true;
+          },
+          addNewSession() {
+            this.$refs.addSessionForm.validate(valid => {
+              if (valid) {
+                const newSession = {
+                  sessionId: `${this.newSession.beginString}:${this.newSession.senderCompID}:${this.newSession.targetCompID}`,
+                  ipAddress: this.newSession.ipAddress,
+                  status: 'disconnected',
+                  lastActivity: '-',
+                  certificateStatus: 'valid'
+                };
+                
+                this.sessions.push(newSession);
+                this.addSessionDialogVisible = false;
+                this.$message.success('Session added successfully');
+              }
+            });
+          },
+          viewSessionDetails(session) {
+            this.$message.info(`Viewing details for ${session.sessionId}`);
+            // 实际应用中应该打开详情对话框或导航到详情页面
+          },
+          connectSession(session) {
+            this.$message.info(`Connecting session ${session.sessionId}`);
+            // 实际应用中应该调用API连接会话
+          },
+          disconnectSession(session) {
+            this.$message.info(`Disconnecting session ${session.sessionId}`);
+            // 实际应用中应该调用API断开会话
+          },
+          renewCertificate(session) {
+            this.$message.info(`Renewing certificate for ${session.sessionId}`);
+            // 实际应用中应该调用API更新证书
+          }
+        }
+      }},
+      { path: '/ip-whitelist', component: {
+        template: `
+          <div class="container mx-auto">
+            <div class="flex justify-between items-center mb-6">
+              <h2 class="text-2xl font-bold">IP Whitelist</h2>
+              <el-button type="primary" @click="openAddIpDialog">
+                <i class="fa fa-plus mr-2"></i>Add IP
+              </el-button>
+            </div>
+            
+            <el-card class="bg-white shadow-md p-6">
+              <div class="flex justify-between items-center mb-4">
+                <el-input v-model="searchQuery" placeholder="Search IP addresses..." class="w-1/3">
+                  <i slot="suffix" class="fa fa-search"></i>
+                </el-input>
+                <el-select v-model="statusFilter" placeholder="Filter by status">
+                  <el-option label="All" value="all"></el-option>
+                  <el-option label="Active" value="active"></el-option>
+                  <el-option label="Inactive" value="inactive"></el-option>
+                  <el-option label="Expired" value="expired"></el-option>
+                </el-select>
+              </div>
+              
+              <el-table :data="filteredIps" border>
+                <el-table-column prop="ipAddress" label="IP Address" width="150"></el-table-column>
+                <el-table-column prop="description" label="Description"></el-table-column>
+                <el-table-column prop="addedDate" label="Added Date" width="150"></el-table-column>
+                <el-table-column prop="lastUsed" label="Last Used" width="150"></el-table-column>
+                <el-table-column prop="status" label="Status" width="120">
+                  <template slot-scope="scope">
+                    <el-tag 
+                      :type="scope.row.status === 'active' ? 'success' : 
+                             scope.row.status === 'inactive' ? 'info' : 'danger'">
+                      {{ scope.row.status.charAt(0).toUpperCase() + scope.row.status.slice(1) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="sessions" label="Associated Sessions" width="200">
+                  <template slot-scope="scope">
+                    <el-tag v-for="session in scope.row.sessions" :key="session" size="mini">
+                      {{ session }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Actions" width="180">
+                  <template slot-scope="scope">
+                    <el-button type="text" size="small" :disabled="scope.row.status === 'active'" @click="activateIp(scope.row)">
+                      <i class="fa fa-check-circle mr-1"></i> Activate
+                    </el-button>
+                    <el-button type="text" size="small" :disabled="scope.row.status === 'inactive'" @click="deactivateIp(scope.row)">
+                      <i class="fa fa-times-circle mr-1"></i> Deactivate
+                    </el-button>
+                    <el-button type="text" size="small" @click="deleteIp(scope.row)">
+                      <i class="fa fa-trash mr-1"></i> Delete
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              
+              <div class="flex justify-center mt-6">
+                <el-pagination
+                  @size-change="handleSizeChange"
+                  @current-change="handleCurrentChange"
+                  :current-page="currentPage"
+                  :page-sizes="[10, 20, 50]"
+                  :page-size="pageSize"
+                  layout="total, sizes, prev, pager, next, jumper"
+                  :total="ips.length">
+                </el-pagination>
+              </div>
+            </el-card>
+            
+            <!-- 添加IP对话框 -->
+            <el-dialog title="Add New IP to Whitelist" :visible.sync="addIpDialogVisible" width="40%">
+              <el-form :model="newIp" :rules="ipRules" ref="addIpForm">
+                <el-form-item label="IP Address" prop="ipAddress">
+                  <el-input v-model="newIp.ipAddress"></el-input>
+                </el-form-item>
+                <el-form-item label="Description" prop="description">
+                  <el-input v-model="newIp.description"></el-input>
+                </el-form-item>
+              </el-form>
+              <div slot="footer" class="dialog-footer">
+                <el-button @click="addIpDialogVisible = false">Cancel</el-button>
+                <el-button type="primary" @click="addNewIp">Save</el-button>
+              </div>
+            </el-dialog>
+            
+            <!-- 删除IP确认对话框 -->
+            <el-dialog title="Confirm Deletion" :visible.sync="deleteIpDialogVisible" width="30%">
+              <div slot="content">
+                <p>Are you sure you want to delete IP address <strong>{{ ipToDelete.ipAddress }}</strong>?</p>
+                <p class="text-red-500 mt-2">This action cannot be undone.</p>
+              </div>
+              <div slot="footer" class="dialog-footer">
+                <el-button @click="deleteIpDialogVisible = false">Cancel</el-button>
+                <el-button type="danger" @click="confirmDeleteIp">Delete</el-button>
+              </div>
+            </el-dialog>
+          </div>
+        `,
+        data() {
+          return {
+            ips: [
+              {
+                ipAddress: '192.168.1.10',
+                description: 'Primary Trading Server',
+                addedDate: '2023-01-15',
+                lastUsed: '2023-06-15',
+                status: 'active',
+                sessions: ['FIX.4.4:SENDER1:RECEIVER1', 'FIX.4.4:SENDER5:RECEIVER5']
+              },
+              {
+                ipAddress: '192.168.1.11',
+                description: 'Backup Trading Server',
+                addedDate: '2023-01-15',
+                lastUsed: '2023-06-14',
+                status: 'active',
+                sessions: ['FIX.4.4:SENDER2:RECEIVER2']
+              },
+              {
+                ipAddress: '192.168.1.12',
+                description: 'Development Environment',
+                addedDate: '2023-02-20',
+                lastUsed: '2023-05-25',
+                status: 'inactive',
+                sessions: []
+              },
+              {
+                ipAddress: '192.168.1.13',
+                description: 'Testing Environment',
+                addedDate: '2023-02-20',
+                lastUsed: '2023-06-01',
+                status: 'active',
+                sessions: ['FIX.4.4:SENDER4:RECEIVER4']
+              },
+              {
+                ipAddress: '192.168.1.14',
+                description: 'Disaster Recovery',
+                addedDate: '2023-03-05',
+                lastUsed: '2023-03-10',
+                status: 'expired',
+                sessions: []
+              },
+              {
+                ipAddress: '192.168.1.15',
+                description: 'Analytics Server',
+                addedDate: '2023-03-15',
+                lastUsed: '2023-06-05',
+                status: 'active',
+                sessions: ['FIX.4.4:SENDER6:RECEIVER6']
+              },
+              {
+                ipAddress: '192.168.1.16',
+                description: 'Monitoring System',
+                addedDate: '2023-04-01',
+                lastUsed: '2023-05-15',
+                status: 'inactive',
+                sessions: []
+              },
+              {
+                ipAddress: '192.168.1.17',
+                description: 'Admin Workstation',
+                addedDate: '2023-04-10',
+                lastUsed: '2023-06-10',
+                status: 'active',
+                sessions: ['FIX.4.4:SENDER3:RECEIVER3']
+              }
+            ],
+            searchQuery: '',
+            statusFilter: 'all',
+            pageSize: 10,
+            currentPage: 1,
+            addIpDialogVisible: false,
+            deleteIpDialogVisible: false,
+            newIp: {
+              ipAddress: '',
+              description: ''
+            },
+            ipToDelete: null,
+            ipRules: {
+              ipAddress: [
+                { required: true, message: 'Please enter IP Address', trigger: 'blur' },
+                { pattern: /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/, message: 'Please enter a valid IP address', trigger: 'blur' }
+              ],
+              description: [
+                { required: true, message: 'Please enter description', trigger: 'blur' }
+              ]
+            }
+          }
+        },
+        computed: {
+          filteredIps() {
+            return this.ips
+              .filter(ip => {
+                if (this.statusFilter === 'all') return true;
+                return ip.status === this.statusFilter;
+              })
+              .filter(ip => {
+                if (!this.searchQuery) return true;
+                const query = this.searchQuery.toLowerCase();
+                return ip.ipAddress.toLowerCase().includes(query) ||
+                       ip.description.toLowerCase().includes(query);
+              })
+              .slice((this.currentPage - 1) * this.pageSize, this.currentPage * this.pageSize);
+          }
+        },
+        methods: {
+          handleSizeChange(size) {
+            this.pageSize = size;
+          },
+          handleCurrentChange(page) {
+            this.currentPage = page;
+          },
+          openAddIpDialog() {
+            this.newIp = {
+              ipAddress: '',
+              description: ''
+            };
+            this.addIpDialogVisible = true;
+          },
+          addNewIp() {
+            this.$refs.addIpForm.validate(valid => {
+              if (valid) {
+                // 检查IP是否已存在
+                const existingIp = this.ips.find(ip => ip.ipAddress === this.newIp.ipAddress);
+                if (existingIp) {
+                  this.$message.error('IP address already exists in the whitelist');
+                  return;
+                }
+                
+                const today = new Date().toISOString().split('T')[0];
+                const newIp = {
+                  ipAddress: this.newIp.ipAddress,
+                  description: this.newIp.description,
+                  addedDate: today,
+                  lastUsed: '-',
+                  status: 'active',
+                  sessions: []
+                };
+                
+                this.ips.push(newIp);
+                this.addIpDialogVisible = false;
+                this.$message.success('IP added to whitelist successfully');
+              }
+            });
+          },
+          openDeleteIpDialog(ip) {
+            this.ipToDelete = ip;
+            this.deleteIpDialogVisible = true;
+          },
+          confirmDeleteIp() {
+            if (this.ipToDelete) {
+              const index = this.ips.findIndex(ip => ip.ipAddress === this.ipToDelete.ipAddress);
+              if (index !== -1) {
+                this.ips.splice(index, 1);
+                this.$message.success('IP removed from whitelist successfully');
+              }
+              this.deleteIpDialogVisible = false;
+              this.ipToDelete = null;
+            }
+          },
+          activateIp(ip) {
+            const index = this.ips.findIndex(item => item.ipAddress === ip.ipAddress);
+            if (index !== -1) {
+              this.ips[index].status = 'active';
+              this.$message.success('IP activated successfully');
+            }
+          },
+          deactivateIp(ip) {
+            const index = this.ips.findIndex(item => item.ipAddress === ip.ipAddress);
+            if (index !== -1) {
+              this.ips[index].status = 'inactive';
+              this.$message.success('IP deactivated successfully');
+            }
+          }
+        }
+      }},
+      { path: '/certificates', component: {
+        template: `
+          <div class="container mx-auto">
+            <div class="flex justify-between items-center mb-6">
+              <h2 class="text-2xl font-bold">TLS Certificates</h2>
+              <el-button type="primary" @click="openGenerateCertDialog">
+                <i class="fa fa-plus mr-2"></i>Generate Certificate
+              </el-button>
+            </div>
+            
+            <el-card class="bg-white shadow-md p-6">
+              <div class="flex justify-between items-center mb-4">
+                <el-input v-model="searchQuery" placeholder="Search certificates..." class="w-1/3">
+                  <i slot="suffix" class="fa fa-search"></i>
+                </el-input>
+                <el-select v-model="statusFilter" placeholder="Filter by status">
+                  <el-option label="All" value="all"></el-option>
+                  <el-option label="Valid" value="valid"></el-option>
+                  <el-option label="Expiring Soon" value="expiring_soon"></el-option>
+                  <el-option label="Expired" value="expired"></el-option>
+                </el-select>
+              </div>
+              
+              <el-table :data="filteredCertificates" border>
+                <el-table-column prop="sessionId" label="Session ID" width="220"></el-table-column>
+                <el-table-column prop="serialNumber" label="Serial Number" width="180"></el-table-column>
+                <el-table-column prop="validFrom" label="Valid From" width="150"></el-table-column>
+                <el-table-column prop="validTo" label="Valid To" width="150"></el-table-column>
+                <el-table-column prop="daysRemaining" label="Days Remaining" width="120">
+                  <template slot-scope="scope">
+                    <el-tag 
+                      :type="scope.row.daysRemaining > 30 ? 'success' : 
+                             scope.row.daysRemaining > 7 ? 'warning' : 'danger'">
+                      {{ scope.row.daysRemaining }} days
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="status" label="Status" width="120">
+                  <template slot-scope="scope">
+                    <el-tag 
+                      :type="scope.row.status === 'valid' ? 'success' : 
+                             scope.row.status === 'expiring_soon' ? 'warning' : 'danger'">
+                      {{ scope.row.status.charAt(0).toUpperCase() + scope.row.status.slice(1).replace('_', ' ') }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Actions" width="180">
+                  <template slot-scope="scope">
+                    <el-button type="text" size="small" @click="viewCertificateDetails(scope.row)">
+                      <i class="fa fa-eye mr-1"></i> View
+                    </el-button>
+                    <el-button type="text" size="small" @click="downloadCertificate(scope.row)">
+                      <i class="fa fa-download mr-1"></i> Download
+                    </el-button>
+                    <el-button type="text" size="small" :disabled="scope.row.status === 'valid' && scope.row.daysRemaining > 30" @click="renewCertificate(scope.row)">
+                      <i class="fa fa-refresh mr-1"></i> Renew
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              
+              <div class="flex justify-center mt-6">
+                <el-pagination
+                  @size-change="handleSizeChange"
+                  @current-change="handleCurrentChange"
+                  :current-page="currentPage"
+                  :page-sizes="[10, 20, 50]"
+                  :page-size="pageSize"
+                  layout="total, sizes, prev, pager, next, jumper"
+                  :total="certificates.length">
+                </el-pagination>
+              </div>
+            </el-card>
+            
+            <!-- 生成证书对话框 -->
+            <el-dialog title="Generate New TLS Certificate" :visible.sync="generateCertDialogVisible" width="40%">
+              <el-form :model="newCertificate" :rules="certRules" ref="generateCertForm">
+                <el-form-item label="Session ID" prop="sessionId">
+                  <el-input v-model="newCertificate.sessionId"></el-input>
+                </el-form-item>
+                <el-form-item label="Key Size" prop="keySize">
+                  <el-select v-model="newCertificate.keySize">
+                    <el-option label="2048 bits (minimum)" value="2048"></el-option>
+                    <el-option label="3072 bits" value="3072"></el-option>
+                    <el-option label="4096 bits (preferred)" value="4096"></el-option>
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="Cipher Suite" prop="cipherSuite">
+                  <el-select v-model="newCertificate.cipherSuite">
+                    <el-option label="TLS_ECDHE_RSA_AES_256_GCM_SHA384 (preferred)" value="TLS_ECDHE_RSA_AES_256_GCM_SHA384"></el-option>
+                    <el-option label="TLS_ECDHE_RSA_AES_256_CBC_SHA384" value="TLS_ECDHE_RSA_AES_256_CBC_SHA384"></el-option>
+                    <el-option label="TLS_ECDHE_RSA_AES_128_CBC_SHA256" value="TLS_ECDHE_RSA_AES_128_CBC_SHA256"></el-option>
+                  </el-select>
+                </el-form-item>
+              </el-form>
+              <div slot="footer" class="dialog-footer">
+                <el-button @click="generateCertDialogVisible = false">Cancel</el-button>
+                <el-button type="primary" @click="generateNewCertificate">Generate</el-button>
+              </div>
+            </el-dialog>
+            
+            <!-- 证书详情对话框 -->
+            <el-dialog title="Certificate Details" :visible.sync="certDetailsDialogVisible" width="60%">
+              <div slot="content">
+                <el-card class="bg-gray-50">
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <h4 class="text-sm font-medium text-gray-500 mb-1">Session ID</h4>
+                      <p class="font-mono">{{ selectedCertificate.sessionId }}</p>
+                    </div>
+                    <div>
+                      <h4 class="text-sm font-medium text-gray-500 mb-1">Serial Number</h4>
+                      <p class="font-mono">{{ selectedCertificate.serialNumber }}</p>
+                    </div>
+                    <div>
+                      <h4 class="text-sm font-medium text-gray-500 mb-1">Valid From</h4>
+                      <p>{{ selectedCertificate.validFrom }}</p>
+                    </div>
+                    <div>
+                      <h4 class="text-sm font-medium text-gray-500 mb-1">Valid To</h4>
+                      <p>{{ selectedCertificate.validTo }}</p>
+                    </div>
+                    <div>
+                      <h4 class="text-sm font-medium text-gray-500 mb-1">Key Size</h4>
+                      <p>{{ selectedCertificate.keySize }} bits</p>
+                    </div>
+                    <div>
+                      <h4 class="text-sm font-medium text-gray-500 mb-1">Cipher Suite</h4>
+                      <p>{{ selectedCertificate.cipherSuite }}</p>
+                    </div>
+                    <div>
+                      <h4 class="text-sm font-medium text-gray-500 mb-1">Issuer</h4>
+                      <p class="font-mono">{{ selectedCertificate.issuer }}</p>
+                    </div>
+                    <div>
+                      <h4 class="text-sm font-medium text-gray-500 mb-1">Subject</h4>
+                      <p class="font-mono">{{ selectedCertificate.subject }}</p>
+                    </div>
+                  </div>
+                  
+                  <div class="mt-6">
+                    <h4 class="text-sm font-medium text-gray-500 mb-2">Certificate Status</h4>
+                    <el-tag 
+                      :type="selectedCertificate.status === 'valid' ? 'success' : 
+                             selectedCertificate.status === 'expiring_soon' ? 'warning' : 'danger'">
+                      {{ selectedCertificate.status.charAt(0).toUpperCase() + selectedCertificate.status.slice(1).replace('_', ' ') }}
+                    </el-tag>
+                    <p class="mt-2">Expires in {{ selectedCertificate.daysRemaining }} days</p>
+                  </div>
+                  
+                  <div class="mt-6">
+                    <h4 class="text-sm font-medium text-gray-500 mb-2">Certificate Fingerprint</h4>
+                    <p class="font-mono text-sm">{{ selectedCertificate.fingerprint }}</p>
+                  </div>
+                </el-card>
+              </div>
+              <div slot="footer" class="dialog-footer">
+                <el-button @click="certDetailsDialogVisible = false">Close</el-button>
+              </div>
+            </el-dialog>
+          </div>
+        `,
+        data() {
+          return {
+            certificates: [
+              {
+                sessionId: 'FIX.4.4:SENDER1:RECEIVER1',
+                serialNumber: '2A:B4:7C:1D:3E:5F:8A:0B:2C:4D:6E:8F:0A:2B:4C:6D',
+                validFrom: '2023-01-15',
+                validTo: '2025-01-15',
+                daysRemaining: 570,
+                status: 'valid',
+                keySize: 4096,
+                cipherSuite: 'TLS_ECDHE_RSA_AES_256_GCM_SHA384',
+                issuer: 'CN=Bloomberg CA, O=Bloomberg, C=US',
+                subject: 'CN=SENDER1, O=Client Organization, C=US',
+                fingerprint: '3D:4E:5F:6A:7B:8C:9D:0E:1F:2A:3B:4C:5D:6E:7F:8A'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER2:RECEIVER2',
+                serialNumber: '3C:5E:7A:9B:1D:3F:5A:7C:9E:1A:3C:5E:7A:9B:1D:3F',
+                validFrom: '2023-02-20',
+                validTo: '2025-02-20',
+                daysRemaining: 545,
+                status: 'valid',
+                keySize: 4096,
+                cipherSuite: 'TLS_ECDHE_RSA_AES_256_GCM_SHA384',
+                issuer: 'CN=Bloomberg CA, O=Bloomberg, C=US',
+                subject: 'CN=SENDER2, O=Client Organization, C=US',
+                fingerprint: '4E:5F:6A:7B:8C:9D:0E:1F:2A:3B:4C:5D:6E:7F:8A:9B'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER3:RECEIVER3',
+                serialNumber: '4D:6F:8B:0D:2F:4A:6C:8E:0A:2C:4E:6A:8C:0E:2A:4C',
+                validFrom: '2023-03-05',
+                validTo: '2025-03-05',
+                daysRemaining: 530,
+                status: 'valid',
+                keySize: 3072,
+                cipherSuite: 'TLS_ECDHE_RSA_AES_256_CBC_SHA384',
+                issuer: 'CN=Bloomberg CA, O=Bloomberg, C=US',
+                subject: 'CN=SENDER3, O=Client Organization, C=US',
+                fingerprint: '5F:6A:7B:8C:9D:0E:1F:2A:3B:4C:5D:6E:7F:8A:9B:0C'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER4:RECEIVER4',
+                serialNumber: '5E:7A:9C:1E:3A:5C:7E:9A:1C:3E:5A:7C:9E:1A:3C:5E',
+                validFrom: '2023-03-15',
+                validTo: '2025-03-15',
+                daysRemaining: 520,
+                status: 'valid',
+                keySize: 3072,
+                cipherSuite: 'TLS_ECDHE_RSA_AES_256_CBC_SHA384',
+                issuer: 'CN=Bloomberg CA, O=Bloomberg, C=US',
+                subject: 'CN=SENDER4, O=Client Organization, C=US',
+                fingerprint: '6A:7B:8C:9D:0E:1F:2A:3B:4C:5D:6E:7F:8A:9B:0C:1D'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER5:RECEIVER5',
+                serialNumber: '6D:8F:0B:2D:4F:6A:8C:0E:2A:4C:6E:8A:0C:2E:4A:6C',
+                validFrom: '2023-04-01',
+                validTo: '2025-04-01',
+                daysRemaining: 505,
+                status: 'valid',
+                keySize: 2048,
+                cipherSuite: 'TLS_ECDHE_RSA_AES_128_CBC_SHA256',
+                issuer: 'CN=Bloomberg CA, O=Bloomberg, C=US',
+                subject: 'CN=SENDER5, O=Client Organization, C=US',
+                fingerprint: '7B:8C:9D:0E:1F:2A:3B:4C:5D:6E:7F:8A:9B:0C:1D:2E'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER6:RECEIVER6',
+                serialNumber: '7C:9E:1A:3C:5E:7A:9C:1E:3A:5C:7E:9A:1C:3E:5A:7C',
+                validFrom: '2023-04-10',
+                validTo: '2025-04-10',
+                daysRemaining: 496,
+                status: 'valid',
+                keySize: 2048,
+                cipherSuite: 'TLS_ECDHE_RSA_AES_128_CBC_SHA256',
+                issuer: 'CN=Bloomberg CA, O=Bloomberg, C=US',
+                subject: 'CN=SENDER6, O=Client Organization, C=US',
+                fingerprint: '8C:9D:0E:1F:2A:3B:4C:5D:6E:7F:8A:9B:0C:1D:2E:3F'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER7:RECEIVER7',
+                serialNumber: '8D:0F:2B:4D:6F:8A:0C:2E:4A:6C:8E:0A:2C:4E:6A:8C',
+                validFrom: '2023-05-15',
+                validTo: '2023-06-25',
+                daysRemaining: 10,
+                status: 'expiring_soon',
+                keySize: 2048,
+                cipherSuite: 'TLS_ECDHE_RSA_AES_128_CBC_SHA256',
+                issuer: 'CN=Bloomberg CA, O=Bloomberg, C=US',
+                subject: 'CN=SENDER7, O=Client Organization, C=US',
+                fingerprint: '9D:0E:1F:2A:3B:4C:5D:6E:7F:8A:9B:0C:1D:2E:3F:4A'
+              },
+              {
+                sessionId: 'FIX.4.4:SENDER8:RECEIVER8',
+                serialNumber: '9E:1A:3C:5E:7A:9C:1E:3A:5C:7E:9A:1C:3E:5A:7C:9E',
+                validFrom: '2022-06-01',
+                validTo: '2023-06-01',
+                daysRemaining: -14,
+                status: 'expired',
+                keySize: 2048,
+                cipherSuite: 'TLS_ECDHE_RSA_AES_128_CBC_SHA256',
+                issuer: 'CN=Bloomberg CA, O=Bloomberg, C=US',
+                subject: 'CN=SENDER8, O=Client Organization, C=US',
+                fingerprint: '0E:1F:2A:3B:4C:5D:6E:7F:8A:9B:0C:1D:2E:3F:4A:5B'
+              }
+            ],
+            searchQuery: '',
+            statusFilter: 'all',
+            pageSize: 10,
+            currentPage: 1,
+            generateCertDialogVisible: false,
+            certDetailsDialogVisible: false,
+            newCertificate: {
+              sessionId: '',
+              keySize: 
