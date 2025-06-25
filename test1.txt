@@ -751,3 +751,316 @@ public class FixServer {
         }
     }
 }
+
+
+import org.apache.mina.core.filterchain.IoFilterAdapter;
+import org.apache.mina.core.session.IoSession;
+import java.net.InetSocketAddress;
+import quickfix.Session;
+
+public class IpCaptureFilter extends IoFilterAdapter {
+    
+    @Override
+    public void sessionCreated(NextFilter nextFilter, IoSession session) {
+        try {
+            InetSocketAddress remoteAddress = (InetSocketAddress) session.getRemoteAddress();
+            String clientIp = remoteAddress.getAddress().getHostAddress();
+            
+            // 处理代理情况（如 X-Forwarded-For）
+            String realIp = extractRealIp(session, clientIp);
+            
+            // 将 IP 存储在 MINA 会话中
+            session.setAttribute("CLIENT_IP", realIp);
+            
+            // 如果 QuickFIX Session 已创建，立即设置属性
+            setIpToQuickFixSession(session, realIp);
+            
+            System.out.println("Captured IP: " + realIp);
+            
+        } catch (Exception e) {
+            System.err.println("Error capturing IP: " + e.getMessage());
+        } finally {
+            nextFilter.sessionCreated(session);
+        }
+    }
+    
+    private String extractRealIp(IoSession session, String defaultIp) {
+        // 检查代理头
+        Object xffHeader = session.getAttribute("X-Forwarded-For");
+        if (xffHeader != null && xffHeader instanceof String) {
+            String xff = (String) xffHeader;
+            return xff.split(",")[0].trim();
+        }
+        return defaultIp;
+    }
+    
+    private void setIpToQuickFixSession(IoSession minaSession, String ip) {
+        // 尝试获取关联的 QuickFIX Session
+        Object qfSessionObj = minaSession.getAttribute("QF_SESSION");
+        if (qfSessionObj instanceof Session) {
+            Session session = (Session) qfSessionObj;
+            session.setProperty("CLIENT_IP", ip);
+        }
+    }
+}
+
+import java.util.*;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import quickfix.Session;
+import quickfix.RejectLogon;
+
+public class IpWhitelistValidator {
+    private final Set<String> allowedSingleIps = new HashSet<>();
+    private final List<CIDRRange> allowedCidrs = new ArrayList<>();
+    
+    private static final Logger logger = LoggerFactory.getLogger(IpWhitelistValidator.class);
+
+    public IpWhitelistValidator(String... ips) {
+        for (String ip : ips) {
+            addAllowedIp(ip);
+        }
+    }
+    
+    public void addAllowedIp(String ipOrCidr) {
+        if (ipOrCidr == null || ipOrCidr.isEmpty()) return;
+        
+        if (ipOrCidr.contains("/")) {
+            try {
+                allowedCidrs.add(new CIDRRange(ipOrCidr));
+                logger.info("Added CIDR to whitelist: {}", ipOrCidr);
+            } catch (IllegalArgumentException e) {
+                logger.warn("Invalid CIDR format: {}", ipOrCidr);
+            }
+        } else {
+            allowedSingleIps.add(ipOrCidr);
+            logger.info("Added IP to whitelist: {}", ipOrCidr);
+        }
+    }
+    
+    public boolean isIpAllowed(String ip) {
+        if (ip == null || ip.isEmpty()) {
+            return false;
+        }
+        
+        // 检查单个IP
+        if (allowedSingleIps.contains(ip)) {
+            return true;
+        }
+        
+        // 检查CIDR网段
+        for (CIDRRange cidr : allowedCidrs) {
+            if (cidr.contains(ip)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    public void validateIp(Session session) throws RejectLogon {
+        String clientIp = getClientIpFromSession(session);
+        if (clientIp == null) {
+            logger.warn("Client IP not available for session: {}", session.getSessionID());
+            throw new RejectLogon("Client IP not available");
+        }
+        
+        if (!isIpAllowed(clientIp)) {
+            logger.warn("Rejected login from IP: {} (Session: {})", clientIp, session.getSessionID());
+            throw new RejectLogon("IP " + clientIp + " not in whitelist");
+        }
+        
+        logger.info("Allowed login from IP: {} (Session: {})", clientIp, session.getSessionID());
+    }
+    
+    public static String getClientIpFromSession(Session session) {
+        return session.getProperty("CLIENT_IP");
+    }
+    
+    // CIDR 范围处理类
+    private static class CIDRRange {
+        private final byte[] network;
+        private final byte[] netmask;
+        
+        public CIDRRange(String cidr) {
+            try {
+                String[] parts = cidr.split("/");
+                int prefix = Integer.parseInt(parts[1]);
+                InetAddress networkAddr = InetAddress.getByName(parts[0]);
+                
+                this.network = networkAddr.getAddress();
+                this.netmask = createNetmask(prefix, network.length);
+                
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Invalid CIDR: " + cidr);
+            }
+        }
+        
+        public boolean contains(String ip) {
+            try {
+                byte[] addr = InetAddress.getByName(ip).getAddress();
+                if (addr.length != network.length) return false;
+                
+                for (int i = 0; i < addr.length; i++) {
+                    if ((addr[i] & netmask[i]) != (network[i] & netmask[i])) {
+                        return false;
+                    }
+                }
+                return true;
+            } catch (UnknownHostException e) {
+                return false;
+            }
+        }
+        
+        private byte[] createNetmask(int prefix, int bytes) {
+            byte[] mask = new byte[bytes];
+            for (int i = 0; i < bytes; i++) {
+                int bits = Math.min(8, Math.max(0, prefix - i * 8));
+                mask[i] = (byte) (0xFF << (8 - bits));
+            }
+            return mask;
+        }
+    }
+}
+
+
+import quickfix.*;
+import org.apache.mina.core.filterchain.IoFilterChainBuilder;
+import org.apache.mina.core.filterchain.DefaultIoFilterChainBuilder;
+
+public class SecureAcceptor extends SocketAcceptor {
+
+    private final IpWhitelistValidator ipValidator;
+    private final IoFilterChainBuilder filterChainBuilder;
+
+    public SecureAcceptor(Application application, 
+                         MessageStoreFactory storeFactory,
+                         SessionSettings settings, 
+                         LogFactory logFactory,
+                         MessageFactory messageFactory,
+                         IpWhitelistValidator ipValidator) throws ConfigError {
+        super(application, storeFactory, settings, logFactory, messageFactory);
+        this.ipValidator = ipValidator;
+        this.filterChainBuilder = createFilterChainBuilder();
+    }
+
+    private IoFilterChainBuilder createFilterChainBuilder() {
+        DefaultIoFilterChainBuilder chainBuilder = new DefaultIoFilterChainBuilder();
+        chainBuilder.addLast("ipCapture", new IpCaptureFilter());
+        return chainBuilder;
+    }
+
+    @Override
+    protected IoFilterChainBuilder getFilterChainBuilder() {
+        return filterChainBuilder;
+    }
+    
+    public IpWhitelistValidator getIpValidator() {
+        return ipValidator;
+    }
+}
+
+import quickfix.*;
+import quickfix.field.MsgType;
+
+public class SecureFixApplication implements Application {
+    
+    private static final Logger logger = LoggerFactory.getLogger(SecureFixApplication.class);
+    private final SecureAcceptor acceptor;
+    
+    public SecureFixApplication(SecureAcceptor acceptor) {
+        this.acceptor = acceptor;
+    }
+
+    @Override
+    public void onCreate(SessionID sessionId) {
+        logger.info("Session created: {}", sessionId);
+        // 确保 IP 属性已设置
+        ensureIpPropertySet(sessionId);
+    }
+    
+    private void ensureIpPropertySet(SessionID sessionId) {
+        try {
+            Session session = Session.lookupSession(sessionId);
+            String clientIp = IpWhitelistValidator.getClientIpFromSession(session);
+            
+            if (clientIp == null) {
+                logger.warn("IP not set for session: {}", sessionId);
+                // 尝试延迟设置（如果 MINA 会话已存在）
+                setDelayedIpProperty(session);
+            }
+        } catch (SessionNotFound e) {
+            logger.error("Session not found: {}", sessionId, e);
+        }
+    }
+    
+    private void setDelayedIpProperty(Session session) {
+        // 在 MINA 会话中查找 IP 并设置到 Session 属性
+        try {
+            // 获取 MINA 会话（兼容不同版本）
+            Object minaSession = getMinaSession(session);
+            if (minaSession instanceof IoSession) {
+                String clientIp = (String) ((IoSession) minaSession).getAttribute("CLIENT_IP");
+                if (clientIp != null) {
+                    session.setProperty("CLIENT_IP", clientIp);
+                    logger.info("Set delayed IP property: {} for session: {}", 
+                                clientIp, session.getSessionID());
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Failed to set delayed IP property", e);
+        }
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionId) 
+            throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
+        
+        // 仅在登录消息时验证
+        if (MsgType.LOGON.equals(message.getHeader().getString(MsgType.FIELD))) {
+            try {
+                Session session = Session.lookupSession(sessionId);
+                
+                // 进行白名单验证
+                acceptor.getIpValidator().validateIp(session);
+                
+            } catch (SessionNotFound e) {
+                logger.error("Session not found during logon: {}", sessionId, e);
+                throw new RejectLogon("Session not found");
+            }
+        }
+    }
+    
+    // 兼容性方法获取 MINA 会话（仅用于延迟设置）
+    private Object getMinaSession(Session session) throws Exception {
+        try {
+            // 尝试 QuickFIX/J 2.x 的方式
+            Field socketField = session.getClass().getDeclaredField("socket");
+            socketField.setAccessible(true);
+            Object socketWrapper = socketField.get(session);
+            
+            Field minaSessionField = socketWrapper.getClass().getDeclaredField("minaSession");
+            minaSessionField.setAccessible(true);
+            return minaSessionField.get(socketWrapper);
+            
+        } catch (NoSuchFieldException e) {
+            // 回退到 QuickFIX/J 1.x 的方式
+            Field ioSessionField = Session.class.getDeclaredField("ioSession");
+            ioSessionField.setAccessible(true);
+            return ioSessionField.get(session);
+        }
+    }
+
+    // 其他必要回调方法
+    @Override public void onLogon(SessionID sessionId) {
+        logger.info("User logged on: {}", sessionId);
+    }
+    
+    @Override public void onLogout(SessionID sessionId) {
+        logger.info("User logged out: {}", sessionId);
+    }
+    
+    @Override public void toAdmin(Message message, SessionID sessionId) {}
+    @Override public void fromApp(Message message, SessionID sessionId) {}
+    @Override public void toApp(Message message, SessionID sessionId) {}
+}
