@@ -318,3 +318,254 @@ keytool -gencert -alias bloomberg_ca -infile server.csr -outfile server.crt -key
 keytool -importcert -alias server_cert -file server.crt -keystore server_keystore.jks
 
 # 生成客户端证书（相同流程）
+
+
+
+import java.util.Set;
+import java.util.HashSet;
+
+public class IpWhitelistValidator {
+    private final Set<String> allowedIps = new HashSet<>();
+
+    public IpWhitelistValidator(String... ips) {
+        for (String ip : ips) {
+            allowedIps.add(ip);
+        }
+    }
+    
+    public void addAllowedIp(String ip) {
+        allowedIps.add(ip);
+    }
+    
+    public boolean isIpAllowed(String ip) {
+        return allowedIps.contains(ip);
+    }
+    
+    public void validateIp(String ip) throws RejectLogon {
+        if (!isIpAllowed(ip)) {
+            throw new RejectLogon("IP " + ip + " not in whitelist");
+        }
+    }
+}
+
+
+import org.apache.mina.core.filterchain.IoFilterAdapter;
+import org.apache.mina.core.session.IoSession;
+import java.net.InetSocketAddress;
+
+public class IpCaptureFilter extends IoFilterAdapter {
+    
+    @Override
+    public void sessionCreated(NextFilter nextFilter, IoSession session) {
+        InetSocketAddress remoteAddress = (InetSocketAddress) session.getRemoteAddress();
+        String clientIp = remoteAddress.getAddress().getHostAddress();
+        
+        // 存储到 session 属性
+        session.setAttribute("CLIENT_IP", clientIp);
+        System.out.println("Captured IP: " + clientIp);
+        
+        nextFilter.sessionCreated(session);
+    }
+}
+
+
+import quickfix.*;
+import org.apache.mina.core.filterchain.IoFilterChainBuilder;
+import org.apache.mina.core.filterchain.DefaultIoFilterChainBuilder;
+
+public class SecureAcceptor extends ThreadedSocketAcceptor {
+
+    private final IpWhitelistValidator ipValidator;
+
+    public SecureAcceptor(Application application, 
+                         MessageStoreFactory storeFactory,
+                         SessionSettings settings, 
+                         LogFactory logFactory,
+                         MessageFactory messageFactory,
+                         IpWhitelistValidator ipValidator) throws ConfigError {
+        super(application, storeFactory, settings, logFactory, messageFactory);
+        this.ipValidator = ipValidator;
+    }
+
+    @Override
+    protected IoFilterChainBuilder createIoFilterChainBuilder() {
+        DefaultIoFilterChainBuilder chainBuilder = new DefaultIoFilterChainBuilder();
+        chainBuilder.addLast("ipCapture", new IpCaptureFilter());
+        return chainBuilder;
+    }
+    
+    public IpWhitelistValidator getIpValidator() {
+        return ipValidator;
+    }
+}
+
+import quickfix.*;
+import quickfix.field.MsgType;
+import org.apache.mina.core.session.IoSession;
+
+public class SecureFixApplication implements Application {
+    
+    private final SecureAcceptor acceptor;
+    
+    public SecureFixApplication(SecureAcceptor acceptor) {
+        this.acceptor = acceptor;
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionId) 
+            throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
+        
+        // 仅在登录消息时验证
+        if (MsgType.LOGON.equals(message.getHeader().getString(MsgType.FIELD))) {
+            try {
+                Session session = Session.lookupSession(sessionId);
+                IoSession minaSession = getMinaSession(session);
+                String clientIp = (String) minaSession.getAttribute("CLIENT_IP");
+                
+                // 进行白名单验证
+                acceptor.getIpValidator().validateIp(clientIp);
+                System.out.println("IP " + clientIp + " passed whitelist check");
+                
+            } catch (Exception e) {
+                throw new RejectLogon("IP validation failed: " + e.getMessage());
+            }
+        }
+    }
+    
+    private IoSession getMinaSession(Session session) throws Exception {
+        Field ioSessionField = Session.class.getDeclaredField("ioSession");
+        ioSessionField.setAccessible(true);
+        return (IoSession) ioSessionField.get(session);
+    }
+
+    // 其他方法实现
+    @Override public void onCreate(SessionID sessionId) {}
+    @Override public void onLogon(SessionID sessionId) {}
+    @Override public void onLogout(SessionID sessionId) {}
+    @Override public void toAdmin(Message message, SessionID sessionId) {}
+    @Override public void fromApp(Message message, SessionID sessionId) {}
+    @Override public void toApp(Message message, SessionID sessionId) {}
+}
+
+
+import quickfix.*;
+
+public class FixServer {
+    public static void main(String[] args) throws ConfigError {
+        // 创建 IP 白名单验证器
+        IpWhitelistValidator ipValidator = new IpWhitelistValidator(
+            "192.168.1.100",
+            "10.0.0.5",
+            "172.16.0.0/16"  // 支持 CIDR 格式
+        );
+        
+        // 创建自定义 Acceptor
+        SessionSettings settings = new SessionSettings("acceptor.cfg");
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new FileLogFactory(settings);
+        MessageFactory msgFactory = new DefaultMessageFactory();
+        
+        SecureAcceptor acceptor = new SecureAcceptor(
+            null, // Application 稍后注入
+            storeFactory,
+            settings,
+            logFactory,
+            msgFactory,
+            ipValidator
+        );
+        
+        // 创建 Application 并注入 Acceptor
+        SecureFixApplication app = new SecureFixApplication(acceptor);
+        acceptor.setApplication(app);
+        
+        // 启动服务
+        acceptor.start();
+        System.out.println("FIX Acceptor started with IP whitelisting");
+        
+        // 添加运行时动态更新白名单
+        Runtime.getRuntime().addShutdownHook(new Thread(acceptor::stop));
+    }
+}
+
+import java.util.*;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+
+public class EnhancedIpValidator {
+    private final Set<String> allowedSingleIps = new HashSet<>();
+    private final List<CIDRRange> allowedCidrs = new ArrayList<>();
+
+    public void addAllowedIp(String ipOrCidr) {
+        if (ipOrCidr.contains("/")) {
+            allowedCidrs.add(new CIDRRange(ipOrCidr));
+        } else {
+            allowedSingleIps.add(ipOrCidr);
+        }
+    }
+
+    public boolean isIpAllowed(String ip) {
+        // 检查单个IP
+        if (allowedSingleIps.contains(ip)) {
+            return true;
+        }
+        
+        // 检查CIDR网段
+        for (CIDRRange cidr : allowedCidrs) {
+            if (cidr.contains(ip)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    private static class CIDRRange {
+        private final byte[] network;
+        private final byte[] netmask;
+        
+        public CIDRRange(String cidr) {
+            try {
+                String[] parts = cidr.split("/");
+                int prefix = Integer.parseInt(parts[1]);
+                InetAddress networkAddr = InetAddress.getByName(parts[0]);
+                
+                this.network = networkAddr.getAddress();
+                this.netmask = createNetmask(prefix, network.length);
+                
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Invalid CIDR: " + cidr);
+            }
+        }
+        
+        public boolean contains(String ip) {
+            try {
+                byte[] addr = InetAddress.getByName(ip).getAddress();
+                if (addr.length != network.length) return false;
+                
+                for (int i = 0; i < addr.length; i++) {
+                    if ((addr[i] & netmask[i]) != (network[i] & netmask[i])) {
+                        return false;
+                    }
+                }
+                return true;
+            } catch (UnknownHostException e) {
+                return false;
+            }
+        }
+        
+        private byte[] createNetmask(int prefix, int bytes) {
+            byte[] mask = new byte[bytes];
+            for (int i = 0; i < bytes; i++) {
+                int bits = Math.min(8, Math.max(0, prefix - i * 8));
+                mask[i] = (byte) (0xFF << (8 - bits));
+            }
+            return mask;
+        }
+    }
+}
+
+// 在过滤器中检查代理头
+String realIp = session.getHeader("X-Forwarded-For");
+if (realIp != null) {
+    clientIp = realIp.split(",")[0].trim();
+}
