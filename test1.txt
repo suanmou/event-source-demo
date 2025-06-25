@@ -569,3 +569,185 @@ String realIp = session.getHeader("X-Forwarded-For");
 if (realIp != null) {
     clientIp = realIp.split(",")[0].trim();
 }
+
+
+import org.apache.mina.core.filterchain.IoFilterAdapter;
+import org.apache.mina.core.session.IoSession;
+import java.net.InetSocketAddress;
+
+public class IpCaptureFilter extends IoFilterAdapter {
+    
+    @Override
+    public void sessionCreated(NextFilter nextFilter, IoSession session) {
+        InetSocketAddress remoteAddress = (InetSocketAddress) session.getRemoteAddress();
+        String clientIp = remoteAddress.getAddress().getHostAddress();
+        
+        // 存储 IP 并处理代理情况
+        String realIp = getRealIp(session, clientIp);
+        session.setAttribute("CLIENT_IP", realIp);
+        
+        nextFilter.sessionCreated(session);
+    }
+    
+    private String getRealIp(IoSession session, String defaultIp) {
+        // 检查代理头（如 X-Forwarded-For）
+        Object xffHeader = session.getAttribute("X-Forwarded-For");
+        if (xffHeader != null && xffHeader instanceof String) {
+            String xff = (String) xffHeader;
+            return xff.split(",")[0].trim(); // 取第一个地址
+        }
+        return defaultIp;
+    }
+}
+
+
+import quickfix.*;
+import org.apache.mina.core.filterchain.IoFilterChainBuilder;
+import org.apache.mina.core.filterchain.DefaultIoFilterChainBuilder;
+
+public class SecureAcceptor extends SocketAcceptor {
+
+    private final IpWhitelistValidator ipValidator;
+    private final IoFilterChainBuilder filterChainBuilder;
+
+    public SecureAcceptor(Application application, 
+                         MessageStoreFactory storeFactory,
+                         SessionSettings settings, 
+                         LogFactory logFactory,
+                         MessageFactory messageFactory,
+                         IpWhitelistValidator ipValidator) throws ConfigError {
+        super(application, storeFactory, settings, logFactory, messageFactory);
+        this.ipValidator = ipValidator;
+        
+        // 创建过滤器链
+        this.filterChainBuilder = createFilterChainBuilder();
+    }
+
+    private IoFilterChainBuilder createFilterChainBuilder() {
+        DefaultIoFilterChainBuilder chainBuilder = new DefaultIoFilterChainBuilder();
+        chainBuilder.addLast("ipCapture", new IpCaptureFilter());
+        return chainBuilder;
+    }
+
+    @Override
+    protected IoFilterChainBuilder getFilterChainBuilder() {
+        return filterChainBuilder;
+    }
+    
+    public IpWhitelistValidator getIpValidator() {
+        return ipValidator;
+    }
+}
+
+
+import quickfix.*;
+import quickfix.field.MsgType;
+import org.apache.mina.core.session.IoSession;
+import java.lang.reflect.Field;
+
+public class SecureFixApplication implements Application {
+    
+    private final SecureAcceptor acceptor;
+    
+    public SecureFixApplication(SecureAcceptor acceptor) {
+        this.acceptor = acceptor;
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionId) 
+            throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
+        
+        if (MsgType.LOGON.equals(message.getHeader().getString(MsgType.FIELD))) {
+            try {
+                String clientIp = getClientIp(sessionId);
+                acceptor.getIpValidator().validateIp(clientIp);
+                System.out.println("IP " + clientIp + " passed whitelist check");
+            } catch (Exception e) {
+                throw new RejectLogon("IP validation failed: " + e.getMessage());
+            }
+        }
+    }
+    
+    private String getClientIp(SessionID sessionId) throws Exception {
+        Session session = Session.lookupSession(sessionId);
+        IoSession minaSession = getMinaSession(session);
+        return (String) minaSession.getAttribute("CLIENT_IP");
+    }
+    
+    private IoSession getMinaSession(Session session) throws Exception {
+        // 兼容不同版本的反射获取
+        try {
+            // 尝试 QuickFIX/J 2.x 的方式
+            Field socketField = session.getClass().getDeclaredField("socket");
+            socketField.setAccessible(true);
+            Object socketWrapper = socketField.get(session);
+            
+            Field minaSessionField = socketWrapper.getClass().getDeclaredField("minaSession");
+            minaSessionField.setAccessible(true);
+            return (IoSession) minaSessionField.get(socketWrapper);
+            
+        } catch (NoSuchFieldException e) {
+            // 回退到 QuickFIX/J 1.x 的方式
+            Field ioSessionField = Session.class.getDeclaredField("ioSession");
+            ioSessionField.setAccessible(true);
+            return (IoSession) ioSessionField.get(session);
+        }
+    }
+
+    // 其他方法实现...
+}
+
+import quickfix.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class FixServer {
+    private static final Logger logger = LoggerFactory.getLogger(FixServer.class);
+    
+    public static void main(String[] args) {
+        try {
+            // 检查 QuickFIX/J 版本
+            String version = quickfix.System.getVersion();
+            logger.info("Starting FIX Server with QuickFIX/J version: {}", version);
+            
+            // 创建 IP 白名单验证器
+            IpWhitelistValidator ipValidator = new IpWhitelistValidator(
+                "192.168.1.100", "10.0.0.5", "172.16.0.0/16"
+            );
+            
+            // 配置设置
+            SessionSettings settings = new SessionSettings("acceptor.cfg");
+            MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+            LogFactory logFactory = new SLF4JLogFactory(settings); // 推荐使用 SLF4J
+            MessageFactory msgFactory = new DefaultMessageFactory();
+            
+            // 创建自定义 Acceptor
+            SecureAcceptor acceptor = new SecureAcceptor(
+                null, // Application 稍后注入
+                storeFactory,
+                settings,
+                logFactory,
+                msgFactory,
+                ipValidator
+            );
+            
+            // 创建 Application 并注入
+            SecureFixApplication app = new SecureFixApplication(acceptor);
+            acceptor.setApplication(app);
+            
+            // 启动服务
+            acceptor.start();
+            logger.info("FIX Acceptor started with IP whitelisting");
+            
+            // 添加关闭钩子
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                logger.info("Stopping FIX Acceptor...");
+                acceptor.stop();
+            }));
+            
+        } catch (Exception e) {
+            logger.error("Failed to start FIX server", e);
+            System.exit(1);
+        }
+    }
+}
