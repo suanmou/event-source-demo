@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FIX Connectivity 企业管理后台</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.2/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #1890ff;
+            --success-color: #52c41a;
+            --warning-color: #faad14;
+            --danger-color: #f5222d;
+            --bg-light: #f5f7fa;
+            --bg-card: #ffffff;
+            --text-main: #303133;
+            --text-secondary: #606266;
+            --border-color: #ebeef5;
+            --header-bg: #ffffff;
+            --sidebar-bg: #fafbfc;
+            --shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background-color: var(--bg-light);
+            color: var(--text-main);
+            font-family: 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        
+        /* 头部导航 */
+        .header {
+            background-color: var(--header-bg);
+            height: 64px;
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            border-bottom: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+            z-index: 1000;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo img {
+            height: 36px;
+            margin-right: 12px;
+        }
+        
+        .logo h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+        
+        .header-right {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+        }
+        
+        .header-actions {
+            display: flex;
+            align-items: center;
+            margin-right: 24px;
+        }
+        
+        .header-action {
+            margin-left: 20px;
+            cursor: pointer;
+            position: relative;
+            color: var(--text-secondary);
+            transition: color 0.3s;
+        }
+        
+        .header-action:hover {
+            color: var(--primary-color);
+        }
+        
+        .badge {
+            position: absolute;
+            top: -6px;
+            right: -8px;
+            background-color: var(--danger-color);
+            color: white;
+            border-radius: 10px;
+            padding: 2px 6px;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        
+        /* 主容器 */
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        /* 侧边栏 */
+        .sidebar {
+            width: 240px;
+            background-color: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            padding: 24px 0;
+            overflow-y: auto;
+            transition: all 0.3s;
+        }
+        
+        .menu-title {
+            padding: 0 24px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            text-transform: uppercase;
+            margin: 24px 0 12px;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+        
+        .menu-item {
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            color: var(--text-secondary);
+            font-size: 14px;
+            border-left: 3px solid transparent;
+        }
+        
+        .menu-item i {
+            margin-right: 12px;
+            font-size: 16px;
+            width: 20px;
+            text-align: center;
+        }
+        
+        .menu-item.active {
+            background-color: rgba(24, 144, 255, 0.08);
+            border-left: 3px solid var(--primary-color);
+            color: var(--primary-color);
+            font-weight: 500;
+        }
+        
+        .menu-item:hover:not(.active) {
+            background-color: rgba(24, 144, 255, 0.05);
+            color: var(--primary-color);
+        }
+        
+        /* 内容区域 */
+        .content {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+        }
+        
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+        
+        .dashboard-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+        
+        .dashboard-subtitle {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        
+        .stat-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            background-color: var(--bg-card);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+            transition: transform 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+        }
+        
+        .stat-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        
+        .stat-card-title {
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .stat-card-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+        
+        .icon-session {
+            background-color: rgba(24, 144, 255, 0.1);
+            color: var(--primary-color);
+        }
+        
+        .icon-cert {
+            background-color: rgba(82, 196, 26, 0.1);
+            color: var(--success-color);
+        }
+        
+        .icon-ip {
+            background-color: rgba(250, 173, 20, 0.1);
+            color: var(--warning-color);
+        }
+        
+        .icon-alert {
+            background-color: rgba(245, 34, 45, 0.1);
+            color: var(--danger-color);
+        }
+        
+        .stat-card-value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: var(--text-main);
+        }
+        
+        .stat-card-footer {
+            display: flex;
+            align-items: center;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .stat-card-trend {
+            margin-left: 8px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .trend-up {
+            background-color: rgba(82, 196, 26, 0.1);
+            color: var(--success-color);
+        }
+        
+        .trend-down {
+            background-color: rgba(245, 34, 45, 0.1);
+            color: var(--danger-color);
+        }
+        
+        /* 模块卡片 */
+        .module-card {
+            background-color: var(--bg-card);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            color: var(--text-main);
+        }
+        
+        .card-title i {
+            margin-right: 10px;
+            color: var(--primary-color);
+        }
+        
+        /* 图表容器 */
+        .chart-container {
+            height: 300px;
+            width: 100%;
+        }
+        
+        /* 表格样式 */
+        .el-table {
+            background-color: transparent;
+            color: var(--text-main);
+        }
+        
+        .el-table th {
+            background-color: #f8f9fa;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+        
+        .el-table tr {
+            background-color: var(--bg-card);
+        }
+        
+        .el-table--enable-row-hover .el-table__body tr:hover>td {
+            background-color: rgba(24, 144, 255, 0.05);
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .status-active {
+            background-color: rgba(82, 196, 26, 0.1);
+            color: var(--success-color);
+        }
+        
+        .status-warning {
+            background-color: rgba(250, 173, 20, 0.1);
+            color: var(--warning-color);
+        }
+        
+        .status-danger {
+            background-color: rgba(245, 34, 45, 0.1);
+            color: var(--danger-color);
+        }
+        
+        .action-buttons .el-button {
+            margin-right: 8px;
+        }
+        
+        /* 页脚 */
+        .footer {
+            text-align: center;
+            padding: 16px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            border-top: 1px solid var(--border-color);
+            background-color: var(--header-bg);
+        }
+        
+        /* 响应式调整 */
+        @media (max-width: 992px) {
+            .sidebar {
+                width: 200px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .sidebar {
+                position: absolute;
+                left: -240px;
+                z-index: 1000;
+                height: calc(100vh - 64px);
+                box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+            }
+            
+            .sidebar.active {
+                left: 0;
+            }
+            
+            .mobile-menu-toggle {
+                display: block;
+                margin-right: 15px;
+                font-size: 20px;
+                cursor: pointer;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- 顶部导航 -->
+        <div class="header">
+            <div class="logo">
+                <i class="mobile-menu-toggle el-icon-s-fold" @click="toggleSidebar" v-if="isMobile"></i>
+                <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiPjxnIGZpbGw9IiMxODkwZmYiPjxwYXRoIGQ9Ik05MzMuNiA1NzkuOEw3ODcuMiA0NjMuNmwxNDYuNC0xMTYuMkw4MDIuNCAxOTIgNjU2IDMwOC4yIDUwOS42IDE5MiA0MDQgMjg3LjZsMTQ2LjQgMTE2LjJMNjA4IDQ2My42bDE0Ni40IDExNi4yTDYwOCA2OTZsMTQ2LjQgMTE2LjJMODAyLjQgODMyIDkzMy42IDY5NnoiLz48cGF0aCBkPSJNMzY0IDc4MGwyODAtMTY4LTg0LTUyLTE5NiAxMTZ6bTAtMzUybC0xOTYtMTE2IDg0LTUyIDI4MCAxNjh6bTk2LTIwOGgxOTJ2NjRINjAwdjEwNEg0NjB2LTEwNEgzNjB2LTY0aDEwMHYtMTA0aDE0MHYxMDR6Ii8+PC9nPjwvc3ZnPg==" alt="Bloomberg Logo">
+                <h1>FIX Connectivity 管理平台</h1>
+            </div>
+            <div class="header-right">
+                <div class="header-actions">
+                    <div class="header-action">
+                        <i class="el-icon-message"></i>
+                        <span class="badge">5</span>
+                    </div>
+                    <div class="header-action">
+                        <i class="el-icon-bell"></i>
+                        <span class="badge">12</span>
+                    </div>
+                    <div class="header-action">
+                        <i class="el-icon-setting"></i>
+                    </div>
+                </div>
+                <el-dropdown trigger="click">
+                    <div class="el-dropdown-link" style="display: flex; align-items: center; cursor: pointer;">
+                        <el-avatar size="medium" src="https://cube.elemecdn.com/3/7c/3ea6beec64369c2642b92c6726f1epng.png"></el-avatar>
+                        <span style="margin: 0 10px; color: var(--text-main); font-weight: 500;">管理员</span>
+                        <i class="el-icon-caret-bottom" style="color: var(--text-secondary);"></i>
+                    </div>
+                    <el-dropdown-menu slot="dropdown">
+                        <el-dropdown-item><i class="el-icon-user"></i> 个人中心</el-dropdown-item>
+                        <el-dropdown-item><i class="el-icon-setting"></i> 系统设置</el-dropdown-item>
+                        <el-dropdown-item divided><i class="el-icon-switch-button"></i> 退出登录</el-dropdown-item>
+                    </el-dropdown-menu>
+                </el-dropdown>
+            </div>
+        </div>
+        
+        <!-- 主内容区 -->
+        <div class="main-container">
+            <!-- 侧边栏 -->
+            <div class="sidebar" :class="{ active: sidebarActive }">
+                <div class="menu-title">主菜单</div>
+                <div class="menu-item active">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <span>系统概览</span>
+                </div>
+                
+                <div class="menu-title">FIX 连接管理</div>
+                <div class="menu-item">
+                    <i class="fas fa-plug"></i>
+                    <span>会话管理</span>
+                </div>
+                <div class="menu-item">
+                    <i class="fas fa-certificate"></i>
+                    <span>证书管理</span>
+                </div>
+                <div class="menu-item">
+                    <i class="fas fa-lock"></i>
+                    <span>IP白名单</span>
+                </div>
+                <div class="menu-item">
+                    <i class="fas fa-exchange-alt"></i>
+                    <span>连接配置</span>
+                </div>
+                
+                <div class="menu-title">智能运维</div>
+                <div class="menu-item">
+                    <i class="fas fa-bell"></i>
+                    <span>告警中心</span>
+                </div>
+                <div class="menu-item">
+                    <i class="fas fa-file-alt"></i>
+                    <span>日志审计</span>
+                </div>
+                <div class="menu-item">
+                    <i class="fas fa-shield-alt"></i>
+                    <span>灾备测试</span>
+                </div>
+                <div class="menu-item">
+                    <i class="fas fa-chart-line"></i>
+                    <span>性能分析</span>
+                </div>
+                
+                <div class="menu-title">系统设置</div>
+                <div class="menu-item">
+                    <i class="fas fa-users"></i>
+                    <span>用户管理</span>
+                </div>
+                <div class="menu-item">
+                    <i class="fas fa-book"></i>
+                    <span>操作指南</span>
+                </div>
+                <div class="menu-item">
+                    <i class="fas fa-cog"></i>
+                    <span>系统配置</span>
+                </div>
+            </div>
+            
+            <!-- 内容区 -->
+            <div class="content">
+                <div class="dashboard-header">
+                    <div>
+                        <div class="dashboard-title">FIX Connectivity 管理控制台</div>
+                        <div class="dashboard-subtitle">监控、管理和优化您的金融交易连接</div>
+                    </div>
+                    <div>
+                        <el-button type="primary" icon="el-icon-refresh">刷新数据</el-button>
+                        <el-button icon="el-icon-download">导出报告</el-button>
+                    </div>
+                </div>
+                
+                <!-- 统计卡片 -->
+                <div class="stat-cards">
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <div class="stat-card-title">活跃会话</div>
+                            <div class="stat-card-icon icon-session">
+                                <i class="fas fa-plug"></i>
+                            </div>
+                        </div>
+                        <div class="stat-card-value">18</div>
+                        <div class="stat-card-footer">
+                            <span>较上周</span>
+                            <span class="stat-card-trend trend-up">+2</span>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <div class="stat-card-title">证书状态</div>
+                            <div class="stat-card-icon icon-cert">
+                                <i class="fas fa-certificate"></i>
+                            </div>
+                        </div>
+                        <div class="stat-card-value">23/25</div>
+                        <div class="stat-card-footer">
+                            <span>正常</span>
+                            <span class="stat-card-trend trend-down">2 即将过期</span>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <div class="stat-card-title">IP白名单</div>
+                            <div class="stat-card-icon icon-ip">
+                                <i class="fas fa-lock"></i>
+                            </div>
+                        </div>
+                        <div class="stat-card-value">86</div>
+                        <div class="stat-card-footer">
+                            <span>总IP数</span>
+                            <span class="stat-card-trend trend-down">3 不活跃</span>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-card-header">
+                            <div class="stat-card-title">告警事件</div>
+                            <div class="stat-card-icon icon-alert">
+                                <i class="fas fa-exclamation-triangle"></i>
+                            </div>
+                        </div>
+                        <div class="stat-card-value">5</div>
+                        <div class="stat-card-footer">
+                            <span>24小时内</span>
+                            <span class="stat-card-trend trend-down">-3</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 会话状态图表 -->
+                <div class="module-card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <i class="fas fa-chart-bar"></i>
+                            <span>FIX 会话状态监控</span>
+                        </div>
+                        <el-radio-group v-model="chartRange" size="small">
+                            <el-radio-button label="day">今日</el-radio-button>
+                            <el-radio-button label="week">本周</el-radio-button>
+                            <el-radio-button label="month">本月</el-radio-button>
+                        </el-radio-group>
+                    </div>
+                    <div id="sessionChart" class="chart-container"></div>
+                </div>
+                
+                <div class="flex-row">
+                    <div class="flex-col" style="flex: 2; margin-right: 16px;">
+                        <!-- 证书管理 -->
+                        <div class="module-card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <i class="fas fa-certificate"></i>
+                                    <span>证书管理</span>
+                                </div>
+                                <div>
+                                    <el-button type="primary" size="small" icon="el-icon-plus">添加证书</el-button>
+                                    <el-button type="warning" size="small" icon="el-icon-refresh">批量更新</el-button>
+                                </div>
+                            </div>
+                            <el-table :data="certificateData" style="width: 100%">
+                                <el-table-column prop="name" label="证书名称" width="180"></el-table-column>
+                                <el-table-column prop="session" label="所属会话"></el-table-column>
+                                <el-table-column label="状态" width="120">
+                                    <template slot-scope="scope">
+                                        <span class="status-badge" :class="'status-' + scope.row.status">{{ scope.row.statusText }}</span>
+                                    </template>
+                                </el-table-column>
+                                <el-table-column prop="algorithm" label="加密算法" width="180"></el-table-column>
+                                <el-table-column prop="expireDate" label="过期时间" width="120"></el-table-column>
+                                <el-table-column label="操作" width="180">
+                                    <template slot-scope="scope">
+                                        <div class="action-buttons">
+                                            <el-button size="mini" type="primary" icon="el-icon-refresh" v-if="scope.row.status !== 'active'">更新</el-button>
+                                            <el-button size="mini" icon="el-icon-download">下载</el-button>
+                                        </div>
+                                    </template>
+                                </el-table-column>
+                            </el-table>
+                        </div>
+                    </div>
+                    
+                    <div class="flex-col" style="flex: 1;">
+                        <!-- 系统状态 -->
+                        <div class="module-card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <i class="fas fa-server"></i>
+                                    <span>系统状态</span>
+                                </div>
+                                <el-tag type="success">运行正常</el-tag>
+                            </div>
+                            <div style="display: flex; justify-content: space-around; text-align: center; margin: 20px 0;">
+                                <div>
+                                    <div style="font-size: 32px; font-weight: bold; color: var(--success-color);">99.97%</div>
+                                    <div style="color: var(--text-secondary);">可用率</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 32px; font-weight: bold; color: var(--primary-color);">32ms</div>
+                                    <div style="color: var(--text-secondary);">平均延迟</div>
+                                </div>
+                            </div>
+                            <div style="margin-top: 20px;">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                    <span>数据服务</span>
+                                    <el-tag type="success">正常</el-tag>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                    <span>交易网关</span>
+                                    <el-tag type="success">正常</el-tag>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                    <span>风险引擎</span>
+                                    <el-tag type="warning">维护中</el-tag>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>报告系统</span>
+                                    <el-tag type="success">正常</el-tag>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- IP白名单管理 -->
+                <div class="module-card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <i class="fas fa-lock"></i>
+                            <span>IP白名单管理</span>
+                        </div>
+                        <div>
+                            <el-input placeholder="搜索IP地址..." style="width: 200px; margin-right: 10px;" size="small">
+                                <i slot="prefix" class="el-input__icon el-icon-search"></i>
+                            </el-input>
+                            <el-button type="primary" size="small" icon="el-icon-plus">添加IP</el-button>
+                            <el-button size="small" icon="el-icon-upload">批量导入</el-button>
+                        </div>
+                    </div>
+                    <el-table :data="ipWhitelistData" style="width: 100%">
+                        <el-table-column prop="ip" label="IP地址" width="150"></el-table-column>
+                        <el-table-column prop="session" label="所属会话"></el-table-column>
+                        <el-table-column label="活跃状态" width="100">
+                            <template slot-scope="scope">
+                                <span class="status-badge" :class="'status-' + scope.row.status">{{ scope.row.statusText }}</span>
+                            </template>
+                        </el-table-column>
+                        <el-table-column prop="lastActive" label="最后活跃时间" width="160"></el-table-column>
+                        <el-table-column prop="location" label="位置" width="120"></el-table-column>
+                        <el-table-column label="操作" width="120">
+                            <template slot-scope="scope">
+                                <div class="action-buttons">
+                                    <el-button size="mini" icon="el-icon-edit"></el-button>
+                                    <el-button size="mini" icon="el-icon-delete" type="danger"></el-button>
+                                </div>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                    <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="color: var(--text-secondary); font-size: 13px;">
+                            显示 1 到 5 项，共 86 项
+                        </div>
+                        <el-pagination
+                            background
+                            layout="prev, pager, next"
+                            :total="86"
+                            :page-size="5"
+                            :current-page="1"
+                            small>
+                        </el-pagination>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 页脚 -->
+        <div class="footer">
+            © 2023 Bloomberg FIX Connectivity 管理平台 | 版本 2.1.5 | 最后更新: 2023-10-15
+        </div>
+    </div>
+
+    <script>
+        new Vue({
+            el: '#app',
+            data() {
+                return {
+                    // 响应式侧边栏状态
+                    sidebarActive: false,
+                    // 移动端检测
+                    isMobile: window.innerWidth < 768,
+                    // 图表时间范围
+                    chartRange: 'day',
+                    // 证书数据
+                    certificateData: [
+                        { 
+                            name: 'FIX_Session_Prod_01', 
+                            session: 'AIM Production', 
+                            status: 'active', 
+                            statusText: '正常',
+                            algorithm: 'TLS_ECDHE_RSA_AES_256_GCM_SHA384',
+                            expireDate: '2024-12-31' 
+                        },
+                        { 
+                            name: 'FIX_Session_Beta_02', 
+                            session: 'EMS Beta', 
+                            status: 'warning', 
+                            statusText: '60天后过期',
+                            algorithm: 'TLS_ECDHE_RSA_AES_256_CBC_SHA384',
+                            expireDate: '2023-12-15' 
+                        },
+                        { 
+                            name: 'FIX_Session_Prod_03', 
+                            session: 'Post-Trade Production', 
+                            status: 'active', 
+                            statusText: '正常',
+                            algorithm: 'TLS_ECDHE_RSA_AES_256_GCM_SHA384',
+                            expireDate: '2025-03-20' 
+                        },
+                        { 
+                            name: 'FIX_Session_Dev_04', 
+                            session: 'Risk Development', 
+                            status: 'danger', 
+                            statusText: '已过期',
+                            algorithm: 'TLS_ECDHE_RSA_AES_128_CBC_SHA256',
+                            expireDate: '2023-09-30' 
+                        },
+                        { 
+                            name: 'FIX_Session_Prod_05', 
+                            session: 'Data Feed Production', 
+                            status: 'active', 
+                            statusText: '正常',
+                            algorithm: 'TLS_ECDHE_RSA_AES_256_GCM_SHA384',
+                            expireDate: '2024-08-15' 
+                        }
+                    ],
+                    
+                    // IP白名单数据
+                    ipWhitelistData: [
+                        { 
+                            ip: '192.168.1.101', 
+                            session: 'AIM Production', 
+                            status: 'active', 
+                            statusText: '活跃',
+                            lastActive: '2023-10-15 09:23:45',
+                            location: '上海数据中心' 
+                        },
+                        { 
+                            ip: '10.20.30.45', 
+                            session: 'EMS Beta', 
+                            status: 'warning', 
+                            statusText: '低活跃',
+                            lastActive: '2023-09-28 14:12:33',
+                            location: '北京办公室' 
+                        },
+                        { 
+                            ip: '172.16.32.78', 
+                            session: 'Post-Trade Production', 
+                            status: 'active', 
+                            statusText: '活跃',
+                            lastActive: '2023-10-15 10:45:21',
+                            location: '香港灾备中心' 
+                        },
+                        { 
+                            ip: '69.191.198.25', 
+                            session: 'Data Feed Production', 
+                            status: 'danger', 
+                            statusText: '不活跃',
+                            lastActive: '2023-04-12 16:30:11',
+                            location: 'AWS云服务' 
+                        },
+                        { 
+                            ip: '160.43.172.89', 
+                            session: 'Risk Development', 
+                            status: 'active', 
+                            statusText: '活跃',
+                            lastActive: '2023-10-14 17:20:34',
+                            location: 'Azure云服务' 
+                        }
+                    ]
+                }
+            },
+            mounted() {
+                this.renderSessionChart();
+                
+                // 监听窗口大小变化
+                window.addEventListener('resize', this.handleResize);
+            },
+            beforeDestroy() {
+                window.removeEventListener('resize', this.handleResize);
+            },
+            methods: {
+                // 切换侧边栏（移动端）
+                toggleSidebar() {
+                    this.sidebarActive = !this.sidebarActive;
+                },
+                
+                // 处理窗口大小变化
+                handleResize() {
+                    this.isMobile = window.innerWidth < 768;
+                    if (!this.isMobile) {
+                        this.sidebarActive = false;
+                    }
+                },
+                
+                // 渲染会话状态图表
+                renderSessionChart() {
+                    const chart = echarts.init(document.getElementById('sessionChart'));
+                    
+                    const option = {
+                        tooltip: {
+                            trigger: 'axis',
+                            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                            borderColor: '#eee',
+                            borderWidth: 1,
+                            textStyle: {
+                                color: '#333'
+                            },
+                            axisPointer: {
+                                type: 'line',
+                                lineStyle: {
+                                    color: '#dcdfe6'
+                                }
+                            }
+                        },
+                        legend: {
+                            data: ['活跃会话', '告警会话', '断开连接'],
+                            textStyle: {
+                                color: '#606266'
+                            },
+                            right: 10,
+                            top: 10
+                        },
+                        grid: {
+                            left: '3%',
+                            right: '4%',
+                            bottom: '3%',
+                            top: '15%',
+                            containLabel: true
+                        },
+                        xAxis: {
+                            type: 'category',
+                            boundaryGap: false,
+                            data: ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00'],
+                            axisLine: {
+                                lineStyle: {
+                                    color: '#dcdfe6'
+                                }
+                            },
+                            axisLabel: {
+                                color: '#909399'
+                            }
+                        },
+                        yAxis: {
+                            type: 'value',
+                            axisLine: {
+                                show: false
+                            },
+                            axisLabel: {
+                                color: '#909399'
+                            },
+                            splitLine: {
+                                lineStyle: {
+                                    color: '#ebeef5'
+                                }
+                            }
+                        },
+                        series: [
+                            {
+                                name: '活跃会话',
+                                type: 'line',
+                                smooth: true,
+                                data: [10, 12, 14, 16, 15, 17, 18, 17],
+                                lineStyle: {
+                                    color: '#52c41a',
+                                    width: 3
+                                },
+                                itemStyle: {
+                                    color: '#52c41a'
+                                },
+                                symbol: 'circle',
+                                symbolSize: 8,
+                                areaStyle: {
+                                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                                        { offset: 0, color: 'rgba(82, 196, 26, 0.2)' },
+                                        { offset: 1, color: 'rgba(82, 196, 26, 0.05)' }
+                                    ])
+                                }
+                            },
+                            {
+                                name: '告警会话',
+                                type: 'line',
+                                smooth: true,
+                                data: [2, 1, 3, 1, 2, 3, 2, 1],
+                                lineStyle: {
+                                    color: '#faad14',
+                                    width: 3
+                                },
+                                itemStyle: {
+                                    color: '#faad14'
+                                },
+                                symbol: 'circle',
+                                symbolSize: 8,
+                                areaStyle: {
+                                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                                        { offset: 0, color: 'rgba(250, 173, 20, 0.2)' },
+                                        { offset: 1, color: 'rgba(250, 173, 20, 0.05)' }
+                                    ])
+                                }
+                            },
+                            {
+                                name: '断开连接',
+                                type: 'line',
+                                smooth: true,
+                                data: [1, 0, 1, 0, 0, 1, 0, 0],
+                                lineStyle: {
+                                    color: '#f5222d',
+                                    width: 3
+                                },
+                                itemStyle: {
+                                    color: '#f5222d'
+                                },
+                                symbol: 'circle',
+                                symbolSize: 8,
+                                areaStyle: {
+                                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                                        { offset: 0, color: 'rgba(245, 34, 45, 0.2)' },
+                                        { offset: 1, color: 'rgba(245, 34, 45, 0.05)' }
+                                    ])
+                                }
+                            }
+                        ]
+                    };
+                    
+                    chart.setOption(option);
+                    
+                    // 响应窗口大小变化
+                    window.addEventListener('resize', () => {
+                        chart.resize();
+                    });
+                }
+            }
+        });
+    </script>
+</body>
+</html>
