@@ -1,0 +1,1276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP与证书管理 - FIX Connectivity</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #1890ff;
+            --success-color: #52c41a;
+            --warning-color: #faad14;
+            --danger-color: #f5222d;
+            --bg-light: #f5f7fa;
+            --bg-card: #ffffff;
+            --text-main: #303133;
+            --text-secondary: #606266;
+            --border-color: #ebeef5;
+            --header-bg: #ffffff;
+            --sidebar-bg: #fafbfc;
+            --shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background-color: var(--bg-light);
+            color: var(--text-main);
+            font-family: 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        
+        /* 头部导航 */
+        .header {
+            background-color: var(--header-bg);
+            height: 64px;
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            border-bottom: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+            z-index: 1000;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo img {
+            height: 36px;
+            margin-right: 12px;
+        }
+        
+        .logo h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+        
+        .header-right {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+        }
+        
+        .header-actions {
+            display: flex;
+            align-items: center;
+            margin-right: 24px;
+        }
+        
+        .header-action {
+            margin-left: 20px;
+            cursor: pointer;
+            position: relative;
+            color: var(--text-secondary);
+            transition: color 0.3s;
+        }
+        
+        .header-action:hover {
+            color: var(--primary-color);
+        }
+        
+        .badge {
+            position: absolute;
+            top: -6px;
+            right: -8px;
+            background-color: var(--danger-color);
+            color: white;
+            border-radius: 10px;
+            padding: 2px 6px;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        
+        /* 主容器 */
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        /* 标签页导航 */
+        .tabs-nav {
+            background-color: var(--header-bg);
+            padding: 0 24px;
+            border-bottom: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+            z-index: 900;
+        }
+        
+        /* 内容区域 */
+        .content {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+        }
+        
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+        
+        .dashboard-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+        
+        .dashboard-subtitle {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        
+        .stat-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            background-color: var(--bg-card);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+            transition: transform 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+        }
+        
+        .stat-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        
+        .stat-card-title {
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .stat-card-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+        
+        .icon-ip {
+            background-color: rgba(24, 144, 255, 0.1);
+            color: var(--primary-color);
+        }
+        
+        .icon-cert {
+            background-color: rgba(82, 196, 26, 0.1);
+            color: var(--success-color);
+        }
+        
+        .icon-warning {
+            background-color: rgba(250, 173, 20, 0.1);
+            color: var(--warning-color);
+        }
+        
+        .icon-expired {
+            background-color: rgba(245, 34, 45, 0.1);
+            color: var(--danger-color);
+        }
+        
+        .stat-card-value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: var(--text-main);
+        }
+        
+        .stat-card-footer {
+            display: flex;
+            align-items: center;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .stat-card-trend {
+            margin-left: 8px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .trend-up {
+            background-color: rgba(82, 196, 26, 0.1);
+            color: var(--success-color);
+        }
+        
+        .trend-down {
+            background-color: rgba(245, 34, 45, 0.1);
+            color: var(--danger-color);
+        }
+        
+        /* 模块卡片 */
+        .module-card {
+            background-color: var(--bg-card);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            color: var(--text-main);
+        }
+        
+        .card-title i {
+            margin-right: 10px;
+            color: var(--primary-color);
+        }
+        
+        .flex-row {
+            display: flex;
+            margin: 0 -12px;
+        }
+        
+        .flex-col {
+            flex: 1;
+            padding: 0 12px;
+        }
+        
+        /* 表格样式 */
+        .el-table {
+            background-color: transparent;
+            color: var(--text-main);
+        }
+        
+        .el-table th {
+            background-color: #f8f9fa;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+        
+        .el-table tr {
+            background-color: var(--bg-card);
+        }
+        
+        .el-table--enable-row-hover .el-table__body tr:hover>td {
+            background-color: rgba(24, 144, 255, 0.05);
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .status-active {
+            background-color: rgba(82, 196, 26, 0.1);
+            color: var(--success-color);
+        }
+        
+        .status-warning {
+            background-color: rgba(250, 173, 20, 0.1);
+            color: var(--warning-color);
+        }
+        
+        .status-danger {
+            background-color: rgba(245, 34, 45, 0.1);
+            color: var(--danger-color);
+        }
+        
+        .action-buttons .el-button {
+            margin-right: 8px;
+        }
+        
+        .form-section {
+            margin-bottom: 24px;
+        }
+        
+        .form-section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--primary-color);
+        }
+        
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .form-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 24px;
+            gap: 12px;
+        }
+        
+        .ip-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-right: 8px;
+            background-color: #e6f7ff;
+            color: var(--primary-color);
+            border: 1px dashed #91d5ff;
+        }
+        
+        .cert-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 16px;
+            font-size: 12px;
+            background-color: #f9f9f9;
+            border: 1px solid #eee;
+            margin-right: 8px;
+            margin-bottom: 8px;
+        }
+        
+        .cert-chip i {
+            margin-right: 4px;
+        }
+        
+        .cert-chip.active {
+            background-color: #f6ffed;
+            border-color: #b7eb8f;
+        }
+        
+        .cert-chip.warning {
+            background-color: #fffbe6;
+            border-color: #ffe58f;
+        }
+        
+        .cert-chip.expired {
+            background-color: #fff2f0;
+            border-color: #ffccc7;
+        }
+        
+        .detail-item {
+            display: flex;
+            margin-bottom: 12px;
+        }
+        
+        .detail-label {
+            width: 150px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .detail-value {
+            flex: 1;
+            color: var(--text-main);
+        }
+        
+        .expiry-progress {
+            margin-top: 8px;
+        }
+        
+        /* 页脚 */
+        .footer {
+            text-align: center;
+            padding: 16px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            border-top: 1px solid var(--border-color);
+            background-color: var(--header-bg);
+        }
+        
+        /* 标签页 */
+        .tabs-container {
+            margin-bottom: 24px;
+        }
+        
+        .el-tabs__header {
+            margin: 0;
+        }
+        
+        .el-tabs__item {
+            font-weight: 500;
+        }
+        
+        .tab-content {
+            padding: 20px 0;
+        }
+        
+        .map-container {
+            height: 300px;
+            background-color: #f0f2f5;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- 顶部导航 -->
+        <div class="header">
+            <div class="logo">
+                <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiPjxnIGZpbGw9IiMxODkwZmYiPjxwYXRoIGQ9Ik05MzMuNiA1NzkuOEw3ODcuMiA0NjMuNmwxNDYuNC0xMTYuMkw4MDIuNCAxOTIgNjU2IDMwOC4yIDUwOS42IDE5MiA0MDQgMjg3LjZsMTQ2LjQgMTE2LjJMNjA4IDQ2My42bDE0Ni40IDExNi4yTDYwOCA2OTZsMTQ2LjQgMTE2LjJMODAyLjQgODMyIDkzMy42IDY5NnoiLz48cGF0aCBkPSJNMzY0IDc4MGwyODAtMTY4LTg0LTUyLTE5NiAxMTZ6bTAtMzUybC0xOTYtMTE2IDg0LTUyIDI4MCAxNjh6bTk2LTIwOGgxOTJ2NjRINjAwdjEwNEg0NjB2LTEwNEgzNjB2LTY0aDEwMHYtMTA0aDE0MHYxMDR6Ii8+PC9nPjwvc3ZnPg==" alt="Bloomberg Logo">
+                <h1>FIX连接管理平台</h1>
+            </div>
+            <div class="header-right">
+                <div class="header-actions">
+                    <div class="header-action">
+                        <i class="el-icon-message"></i>
+                        <span class="badge">5</span>
+                    </div>
+                    <div class="header-action">
+                        <i class="el-icon-bell"></i>
+                        <span class="badge">12</span>
+                    </div>
+                    <div class="header-action">
+                        <i class="el-icon-setting"></i>
+                    </div>
+                </div>
+                <el-dropdown trigger="click">
+                    <div class="el-dropdown-link" style="display: flex; align-items: center; cursor: pointer;">
+                        <el-avatar size="medium" src="https://cube.elemecdn.com/3/7c/3ea6beec64369c2642b92c6726f1epng.png"></el-avatar>
+                        <span style="margin: 0 10px; color: var(--text-main); font-weight: 500;">管理员</span>
+                        <i class="el-icon-caret-bottom" style="color: var(--text-secondary);"></i>
+                    </div>
+                    <el-dropdown-menu slot="dropdown">
+                        <el-dropdown-item><i class="el-icon-user"></i> 个人中心</el-dropdown-item>
+                        <el-dropdown-item><i class="el-icon-setting"></i> 系统设置</el-dropdown-item>
+                        <el-dropdown-item divided><i class="el-icon-switch-button"></i> 退出登录</el-dropdown-item>
+                    </el-dropdown-menu>
+                </el-dropdown>
+            </div>
+        </div>
+        
+        <!-- 标签页导航 -->
+        <div class="tabs-nav">
+            <el-tabs v-model="activeTab">
+                <el-tab-pane label="IP白名单管理" name="ip"></el-tab-pane>
+                <el-tab-pane label="证书管理" name="cert"></el-tab-pane>
+            </el-tabs>
+        </div>
+        
+        <!-- 主内容区 -->
+        <div class="main-container">
+            <!-- 内容区 -->
+            <div class="content">
+                <!-- IP管理页面 -->
+                <div v-show="activeTab === 'ip'">
+                    <div class="dashboard-header">
+                        <div>
+                            <div class="dashboard-title">IP白名单管理</div>
+                            <div class="dashboard-subtitle">管理和监控所有允许访问系统的IP地址</div>
+                        </div>
+                        <div>
+                            <el-button type="primary" icon="el-icon-plus" @click="openIpDialog('add')">添加IP</el-button>
+                            <el-button icon="el-icon-download">导出列表</el-button>
+                            <el-button icon="el-icon-upload" @click="showBulkImport = true">批量导入</el-button>
+                        </div>
+                    </div>
+                    
+                    <!-- IP统计卡片 -->
+                    <div class="stat-cards">
+                        <div class="stat-card">
+                            <div class="stat-card-header">
+                                <div class="stat-card-title">IP总数</div>
+                                <div class="stat-card-icon icon-ip">
+                                    <i class="fas fa-lock"></i>
+                                </div>
+                            </div>
+                            <div class="stat-card-value">86</div>
+                            <div class="stat-card-footer">
+                                <span>较上月</span>
+                                <span class="stat-card-trend trend-up">+12</span>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-card-header">
+                                <div class="stat-card-title">活跃IP</div>
+                                <div class="stat-card-icon icon-ip">
+                                    <i class="fas fa-plug"></i>
+                                </div>
+                            </div>
+                            <div class="stat-card-value">72</div>
+                            <div class="stat-card-footer">
+                                <span>占比</span>
+                                <span class="stat-card-trend trend-up">83.7%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-card-header">
+                                <div class="stat-card-title">低活跃IP</div>
+                                <div class="stat-card-icon icon-warning">
+                                    <i class="fas fa-exclamation-triangle"></i>
+                                </div>
+                            </div>
+                            <div class="stat-card-value">9</div>
+                            <div class="stat-card-footer">
+                                <span>需要关注</span>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-card-header">
+                                <div class="stat-card-title">不活跃IP</div>
+                                <div class="stat-card-icon icon-expired">
+                                    <i class="fas fa-clock"></i>
+                                </div>
+                            </div>
+                            <div class="stat-card-value">5</div>
+                            <div class="stat-card-footer">
+                                <span>即将禁用</span>
+                                <span class="stat-card-trend trend-down">-3</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- IP列表和操作 -->
+                    <div class="module-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i class="fas fa-list"></i>
+                                <span>IP地址列表</span>
+                            </div>
+                            <div>
+                                <el-input placeholder="搜索IP地址..." style="width: 200px; margin-right: 10px;" v-model="ipSearchQuery" clearable>
+                                    <i slot="prefix" class="el-input__icon el-icon-search"></i>
+                                </el-input>
+                                <el-button type="primary" icon="el-icon-refresh">刷新</el-button>
+                            </div>
+                        </div>
+                        
+                        <el-table :data="filteredIps" style="width: 100%">
+                            <el-table-column prop="ip" label="IP地址" width="160"></el-table-column>
+                            <el-table-column prop="session" label="所属会话"></el-table-column>
+                            <el-table-column label="状态" width="120">
+                                <template slot-scope="scope">
+                                    <span class="status-badge" :class="'status-' + scope.row.status">
+                                        {{ scope.row.statusText }}
+                                    </span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="lastActive" label="最后活跃时间" width="180"></el-table-column>
+                            <el-table-column prop="location" label="地理位置" width="150"></el-table-column>
+                            <el-table-column prop="addedBy" label="添加人" width="120"></el-table-column>
+                            <el-table-column label="操作" width="150">
+                                <template slot-scope="scope">
+                                    <div class="action-buttons">
+                                        <el-button size="mini" icon="el-icon-edit" @click="openIpDialog('edit', scope.row)"></el-button>
+                                        <el-button size="mini" icon="el-icon-delete" type="danger" @click="deleteIp(scope.row)"></el-button>
+                                        <el-button size="mini" icon="el-icon-position" @click="testIp(scope.row)"></el-button>
+                                    </div>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+                        
+                        <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+                            <div style="color: var(--text-secondary); font-size: 13px;">
+                                显示 1 到 {{ ips.length }} 项，共 {{ ips.length }} 项
+                            </div>
+                            <el-pagination
+                                background
+                                layout="prev, pager, next"
+                                :total="ips.length"
+                                :page-size="10"
+                                :current-page="1"
+                                small>
+                            </el-pagination>
+                        </div>
+                    </div>
+                    
+                    <!-- IP地理位置分布 -->
+                    <div class="module-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i class="fas fa-map-marked-alt"></i>
+                                <span>IP地理位置分布</span>
+                            </div>
+                            <el-select v-model="mapFilter" placeholder="筛选" style="width: 120px;">
+                                <el-option label="全部" value="all"></el-option>
+                                <el-option label="活跃" value="active"></el-option>
+                                <el-option label="低活跃" value="low"></el-option>
+                            </el-select>
+                        </div>
+                        
+                        <div class="map-container">
+                            <i class="fas fa-globe-americas" style="font-size: 48px; margin-right: 16px;"></i>
+                            <span>IP地理位置分布可视化地图</span>
+                        </div>
+                        
+                        <div style="display: flex; flex-wrap: wrap;">
+                            <span class="ip-badge">中国: 32个IP</span>
+                            <span class="ip-badge">美国: 28个IP</span>
+                            <span class="ip-badge">日本: 12个IP</span>
+                            <span class="ip-badge">英国: 8个IP</span>
+                            <span class="ip-badge">德国: 4个IP</span>
+                            <span class="ip-badge">新加坡: 2个IP</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 证书管理页面 -->
+                <div v-show="activeTab === 'cert'">
+                    <div class="dashboard-header">
+                        <div>
+                            <div class="dashboard-title">证书管理</div>
+                            <div class="dashboard-subtitle">管理所有TLS证书，确保证书有效性和安全性</div>
+                        </div>
+                        <div>
+                            <el-button type="primary" icon="el-icon-plus" @click="openCertDialog('add')">添加证书</el-button>
+                            <el-button icon="el-icon-refresh">刷新</el-button>
+                            <el-button type="warning" icon="el-icon-alarm-clock">设置提醒</el-button>
+                        </div>
+                    </div>
+                    
+                    <!-- 证书统计卡片 -->
+                    <div class="stat-cards">
+                        <div class="stat-card">
+                            <div class="stat-card-header">
+                                <div class="stat-card-title">证书总数</div>
+                                <div class="stat-card-icon icon-cert">
+                                    <i class="fas fa-certificate"></i>
+                                </div>
+                            </div>
+                            <div class="stat-card-value">25</div>
+                            <div class="stat-card-footer">
+                                <span>较上月</span>
+                                <span class="stat-card-trend trend-up">+3</span>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-card-header">
+                                <div class="stat-card-title">有效证书</div>
+                                <div class="stat-card-icon icon-cert">
+                                    <i class="fas fa-check-circle"></i>
+                                </div>
+                            </div>
+                            <div class="stat-card-value">20</div>
+                            <div class="stat-card-footer">
+                                <span>占比</span>
+                                <span class="stat-card-trend trend-up">80%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-card-header">
+                                <div class="stat-card-title">即将过期</div>
+                                <div class="stat-card-icon icon-warning">
+                                    <i class="fas fa-exclamation-triangle"></i>
+                                </div>
+                            </div>
+                            <div class="stat-card-value">3</div>
+                            <div class="stat-card-footer">
+                                <span>30天内到期</span>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-card-header">
+                                <div class="stat-card-title">已过期</div>
+                                <div class="stat-card-icon icon-expired">
+                                    <i class="fas fa-times-circle"></i>
+                                </div>
+                            </div>
+                            <div class="stat-card-value">2</div>
+                            <div class="stat-card-footer">
+                                <span>需立即处理</span>
+                                <span class="stat-card-trend trend-down">-1</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 证书列表 -->
+                    <div class="module-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i class="fas fa-list"></i>
+                                <span>证书列表</span>
+                            </div>
+                            <div>
+                                <el-input placeholder="搜索证书..." style="width: 200px; margin-right: 10px;" v-model="certSearchQuery" clearable>
+                                    <i slot="prefix" class="el-input__icon el-icon-search"></i>
+                                </el-input>
+                                <el-button type="warning" icon="el-icon-refresh">批量更新</el-button>
+                            </div>
+                        </div>
+                        
+                        <el-table :data="filteredCerts" style="width: 100%">
+                            <el-table-column prop="name" label="证书名称" width="200">
+                                <template slot-scope="scope">
+                                    <div style="display: flex; align-items: center;">
+                                        <i class="fas fa-certificate" :style="{ color: scope.row.statusColor }" style="margin-right: 8px;"></i>
+                                        <span>{{ scope.row.name }}</span>
+                                    </div>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="session" label="所属会话"></el-table-column>
+                            <el-table-column label="状态" width="120">
+                                <template slot-scope="scope">
+                                    <span class="status-badge" :class="'status-' + scope.row.status">
+                                        {{ scope.row.statusText }}
+                                    </span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="有效期" width="220">
+                                <template slot-scope="scope">
+                                    <div>{{ scope.row.validFrom }} 至 {{ scope.row.validTo }}</div>
+                                    <el-progress 
+                                        :percentage="scope.row.validPercentage" 
+                                        :status="scope.row.validStatus"
+                                        :stroke-width="6"
+                                        class="expiry-progress"
+                                        v-if="scope.row.status !== 'expired'">
+                                    </el-progress>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="algorithm" label="加密算法" width="180"></el-table-column>
+                            <el-table-column label="操作" width="180">
+                                <template slot-scope="scope">
+                                    <div class="action-buttons">
+                                        <el-button size="mini" icon="el-icon-edit" @click="openCertDialog('edit', scope.row)"></el-button>
+                                        <el-button size="mini" icon="el-icon-download" @click="downloadCert(scope.row)"></el-button>
+                                        <el-button size="mini" icon="el-icon-refresh" @click="renewCert(scope.row)" type="warning" v-if="scope.row.status !== 'active'"></el-button>
+                                    </div>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+                        
+                        <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+                            <div style="color: var(--text-secondary); font-size: 13px;">
+                                显示 1 到 {{ certs.length }} 项，共 {{ certs.length }} 项
+                            </div>
+                            <el-pagination
+                                background
+                                layout="prev, pager, next"
+                                :total="certs.length"
+                                :page-size="10"
+                                :current-page="1"
+                                small>
+                            </el-pagination>
+                        </div>
+                    </div>
+                    
+                    <!-- 证书标签视图 -->
+                    <div class="module-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i class="fas fa-tags"></i>
+                                <span>证书分类视图</span>
+                            </div>
+                            <el-button type="text" icon="el-icon-s-grid">切换视图</el-button>
+                        </div>
+                        
+                        <div>
+                            <div style="margin-bottom: 16px;">
+                                <el-radio-group v-model="certFilter" size="small">
+                                    <el-radio-button label="all">全部</el-radio-button>
+                                    <el-radio-button label="active">有效</el-radio-button>
+                                    <el-radio-button label="warning">即将过期</el-radio-button>
+                                    <el-radio-button label="expired">已过期</el-radio-button>
+                                </el-radio-group>
+                            </div>
+                            
+                            <div style="display: flex; flex-wrap: wrap;">
+                                <span v-for="cert in filteredCerts" :key="cert.id" class="cert-chip" :class="cert.status">
+                                    <i class="fas fa-certificate" :style="{ color: cert.statusColor }"></i>
+                                    {{ cert.name }}
+                                    <span style="margin-left: 4px; font-size: 11px; color: #999;">({{ cert.validTo }})</span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 证书详情 -->
+                    <div class="module-card" v-if="selectedCert">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i class="fas fa-info-circle"></i>
+                                <span>证书详情</span>
+                            </div>
+                            <div>
+                                <el-button icon="el-icon-copy-document">复制信息</el-button>
+                                <el-button type="success" icon="el-icon-view">查看证书</el-button>
+                            </div>
+                        </div>
+                        
+                        <div class="flex-row">
+                            <div class="flex-col" style="flex: 1;">
+                                <div class="detail-item">
+                                    <div class="detail-label">证书名称</div>
+                                    <div class="detail-value">{{ selectedCert.name }}</div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="detail-label">所属会话</div>
+                                    <div class="detail-value">{{ selectedCert.session }}</div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="detail-label">状态</div>
+                                    <div class="detail-value">
+                                        <span class="status-badge" :class="'status-' + selectedCert.status">
+                                            {{ selectedCert.statusText }}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="detail-label">有效期</div>
+                                    <div class="detail-value">{{ selectedCert.validFrom }} 至 {{ selectedCert.validTo }}</div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="detail-label">颁发机构</div>
+                                    <div class="detail-value">{{ selectedCert.issuer }}</div>
+                                </div>
+                            </div>
+                            
+                            <div class="flex-col" style="flex: 1;">
+                                <div class="detail-item">
+                                    <div class="detail-label">加密算法</div>
+                                    <div class="detail-value">{{ selectedCert.algorithm }}</div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="detail-label">密钥长度</div>
+                                    <div class="detail-value">{{ selectedCert.keyLength }}位</div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="detail-label">证书指纹</div>
+                                    <div class="detail-value" style="font-family: monospace; font-size: 12px;">{{ selectedCert.fingerprint }}</div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="detail-label">添加时间</div>
+                                    <div class="detail-value">{{ selectedCert.addedDate }}</div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="detail-label">添加人</div>
+                                    <div class="detail-value">{{ selectedCert.addedBy }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-actions">
+                            <el-button type="primary" icon="el-icon-refresh" @click="renewCert(selectedCert)">更新证书</el-button>
+                            <el-button type="success" icon="el-icon-download" @click="downloadCert(selectedCert)">下载证书</el-button>
+                            <el-button icon="el-icon-delete" type="danger">删除证书</el-button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 页脚 -->
+        <div class="footer">
+            © 2023 Bloomberg FIX Connectivity 管理平台 | 版本 2.1.5 | 最后更新: 2023-10-15
+        </div>
+        
+        <!-- IP管理对话框 -->
+        <el-dialog :title="ipDialogTitle" :visible.sync="ipDialogVisible" width="600px">
+            <el-form :model="currentIp" label-width="120px">
+                <el-form-item label="IP地址" required>
+                    <el-input v-model="currentIp.ip" placeholder="输入IP地址"></el-input>
+                </el-form-item>
+                <el-form-item label="所属会话" required>
+                    <el-select v-model="currentIp.session" placeholder="选择会话" style="width: 100%;">
+                        <el-option label="AIM 生产环境" value="aim-prod"></el-option>
+                        <el-option label="EMS 测试环境" value="ems-test"></el-option>
+                        <el-option label="市场数据订阅" value="market-data"></el-option>
+                        <el-option label="交易后处理" value="post-trade"></el-option>
+                        <el-option label="参考数据API" value="ref-data"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="地理位置">
+                    <el-input v-model="currentIp.location" placeholder="例如：上海数据中心"></el-input>
+                </el-form-item>
+                <el-form-item label="描述">
+                    <el-input v-model="currentIp.description" type="textarea" :rows="2"></el-input>
+                </el-form-item>
+                <el-form-item label="状态">
+                    <el-radio-group v-model="currentIp.status">
+                        <el-radio label="active">活跃</el-radio>
+                        <el-radio label="low">低活跃</el-radio>
+                        <el-radio label="inactive">不活跃</el-radio>
+                    </el-radio-group>
+                </el-form-item>
+            </el-form>
+            
+            <div slot="footer" class="dialog-footer">
+                <el-button @click="ipDialogVisible = false">取 消</el-button>
+                <el-button type="primary" @click="saveIp">保 存</el-button>
+            </div>
+        </el-dialog>
+        
+        <!-- 批量导入IP对话框 -->
+        <el-dialog title="批量导入IP地址" :visible.sync="showBulkImport" width="500px">
+            <div style="margin-bottom: 20px;">
+                <p>请上传CSV文件，格式要求：</p>
+                <p style="font-size: 12px; color: #666; margin-top: 8px;">
+                    IP地址,所属会话,地理位置,描述<br>
+                    192.168.1.101,AIM Production,上海数据中心,主交易服务器<br>
+                    10.20.30.45,EMS Beta,北京办公室,测试环境
+                </p>
+            </div>
+            <el-upload
+                class="upload-demo"
+                drag
+                action="https://jsonplaceholder.typicode.com/posts/"
+                multiple>
+                <i class="el-icon-upload"></i>
+                <div class="el-upload__text">将文件拖到此处，或<em>点击上传</em></div>
+                <div class="el-upload__tip" slot="tip">只能上传csv文件，且不超过500KB</div>
+            </el-upload>
+            
+            <div slot="footer" class="dialog-footer">
+                <el-button @click="showBulkImport = false">取 消</el-button>
+                <el-button type="primary" @click="importIps">开始导入</el-button>
+            </div>
+        </el-dialog>
+    </div>
+
+    <script>
+        new Vue({
+            el: '#app',
+            data() {
+                return {
+                    // 活动标签页
+                    activeTab: 'ip',
+                    
+                    // IP管理相关数据
+                    ipSearchQuery: '',
+                    mapFilter: 'all',
+                    ipDialogVisible: false,
+                    showBulkImport: false,
+                    ipDialogMode: 'add',
+                    currentIp: {
+                        id: null,
+                        ip: '',
+                        session: '',
+                        location: '',
+                        description: '',
+                        status: 'active',
+                        lastActive: new Date().toLocaleString(),
+                        addedBy: '管理员'
+                    },
+                    ips: [
+                        { id: 1, ip: '192.168.1.101', session: 'AIM Production', status: 'active', statusText: '活跃', lastActive: '2023-10-15 14:23:45', location: '上海数据中心', addedBy: '张三' },
+                        { id: 2, ip: '10.20.30.45', session: 'EMS Beta', status: 'low', statusText: '低活跃', lastActive: '2023-09-28 10:15:32', location: '北京办公室', addedBy: '李四' },
+                        { id: 3, ip: '172.16.32.78', session: 'Post-Trade Production', status: 'active', statusText: '活跃', lastActive: '2023-10-15 09:45:21', location: '香港灾备中心', addedBy: '王五' },
+                        { id: 4, ip: '69.191.198.25', session: 'Data Feed Production', status: 'inactive', statusText: '不活跃', lastActive: '2023-04-12 16:30:11', location: 'AWS云服务', addedBy: '赵六' },
+                        { id: 5, ip: '160.43.172.89', session: 'Risk Development', status: 'active', statusText: '活跃', lastActive: '2023-10-14 17:20:34', location: 'Azure云服务', addedBy: '钱七' },
+                        { id: 6, ip: '203.0.113.42', session: 'Reference Data API', status: 'active', statusText: '活跃', lastActive: '2023-10-15 11:35:22', location: '新加坡数据中心', addedBy: '孙八' },
+                        { id: 7, ip: '198.51.100.123', session: 'Trade Reporting', status: 'low', statusText: '低活跃', lastActive: '2023-10-01 08:45:19', location: '东京办公室', addedBy: '周九' },
+                        { id: 8, ip: '192.0.2.56', session: 'Compliance Monitoring', status: 'inactive', statusText: '不活跃', lastActive: '2023-03-15 14:22:33', location: '法兰克福数据中心', addedBy: '吴十' }
+                    ],
+                    
+                    // 证书管理相关数据
+                    certSearchQuery: '',
+                    certFilter: 'all',
+                    selectedCert: null,
+                    certs: [
+                        { 
+                            id: 1, 
+                            name: 'FIX_Session_Prod_01', 
+                            session: 'AIM Production', 
+                            status: 'active', 
+                            statusText: '有效',
+                            statusColor: '#52c41a',
+                            validFrom: '2023-01-15', 
+                            validTo: '2024-12-31',
+                            validPercentage: 78,
+                            validStatus: 'success',
+                            algorithm: 'TLS_ECDHE_RSA_AES_256_GCM_SHA384',
+                            keyLength: 4096,
+                            issuer: 'Bloomberg CA',
+                            fingerprint: 'A3:4B:97:12:8D:6F:8C:1A:AA:CD:EF:01:23:45:67:89:AB:CD:EF:01',
+                            addedDate: '2023-01-10',
+                            addedBy: '张三'
+                        },
+                        { 
+                            id: 2, 
+                            name: 'FIX_Session_Beta_02', 
+                            session: 'EMS Beta', 
+                            status: 'warning', 
+                            statusText: '即将过期',
+                            statusColor: '#faad14',
+                            validFrom: '2023-03-20', 
+                            validTo: '2023-12-15',
+                            validPercentage: 15,
+                            validStatus: 'warning',
+                            algorithm: 'TLS_ECDHE_RSA_AES_256_CBC_SHA384',
+                            keyLength: 2048,
+                            issuer: 'Bloomberg CA',
+                            fingerprint: 'B4:5C:A8:23:9E:70:8D:2B:BB:DE:F1:12:34:56:78:9A:BC:DE:F0:12',
+                            addedDate: '2023-03-15',
+                            addedBy: '李四'
+                        },
+                        { 
+                            id: 3, 
+                            name: 'Market_Data_SFTP', 
+                            session: 'Market Data', 
+                            status: 'active', 
+                            statusText: '有效',
+                            statusColor: '#52c41a',
+                            validFrom: '2022-11-01', 
+                            validTo: '2024-11-01',
+                            validPercentage: 65,
+                            validStatus: 'success',
+                            algorithm: 'TLS_ECDHE_RSA_AES_256_GCM_SHA384',
+                            keyLength: 4096,
+                            issuer: 'GlobalSign',
+                            fingerprint: 'C5:6D:B9:34:AF:81:9E:3C:CC:EF:01:23:45:67:89:AB:CD:EF:01:23',
+                            addedDate: '2022-10-25',
+                            addedBy: '王五'
+                        },
+                        { 
+                            id: 4, 
+                            name: 'API_Gateway_Cert', 
+                            session: 'Reference API', 
+                            status: 'expired', 
+                            statusText: '已过期',
+                            statusColor: '#f5222d',
+                            validFrom: '2022-05-10', 
+                            validTo: '2023-05-10',
+                            validPercentage: 0,
+                            validStatus: 'exception',
+                            algorithm: 'TLS_ECDHE_RSA_AES_128_CBC_SHA256',
+                            keyLength: 2048,
+                            issuer: 'DigiCert',
+                            fingerprint: 'D6:7E:CA:45:BF:92:AF:4D:DD:F0:12:34:56:78:9A:BC:DE:F0:12:34',
+                            addedDate: '2022-05-05',
+                            addedBy: '赵六'
+                        },
+                        { 
+                            id: 5, 
+                            name: 'Post_Trade_Prod', 
+                            session: 'Post-Trade', 
+                            status: 'active', 
+                            statusText: '有效',
+                            statusColor: '#52c41a',
+                            validFrom: '2023-02-15', 
+                            validTo: '2025-02-15',
+                            validPercentage: 30,
+                            validStatus: 'success',
+                            algorithm: 'TLS_ECDHE_RSA_AES_256_GCM_SHA384',
+                            keyLength: 4096,
+                            issuer: 'Bloomberg CA',
+                            fingerprint: 'E7:8F:DB:56:C0:A3:B0:5E:EE:01:23:45:67:89:AB:CD:EF:01:23:45',
+                            addedDate: '2023-02-10',
+                            addedBy: '钱七'
+                        }
+                    ]
+                }
+            },
+            computed: {
+                // 对话框标题
+                ipDialogTitle() {
+                    return this.ipDialogMode === 'add' ? '添加新IP地址' : '编辑IP地址';
+                },
+                
+                // 过滤后的IP列表
+                filteredIps() {
+                    return this.ips.filter(ip => {
+                        return !this.ipSearchQuery || 
+                            ip.ip.includes(this.ipSearchQuery) ||
+                            ip.session.toLowerCase().includes(this.ipSearchQuery.toLowerCase()) ||
+                            ip.location.toLowerCase().includes(this.ipSearchQuery.toLowerCase());
+                    });
+                },
+                
+                // 过滤后的证书列表
+                filteredCerts() {
+                    return this.certs.filter(cert => {
+                        const matchesSearch = !this.certSearchQuery || 
+                            cert.name.toLowerCase().includes(this.certSearchQuery.toLowerCase()) ||
+                            cert.session.toLowerCase().includes(this.certSearchQuery.toLowerCase());
+                        
+                        const matchesFilter = this.certFilter === 'all' || 
+                            (this.certFilter === 'active' && cert.status === 'active') ||
+                            (this.certFilter === 'warning' && cert.status === 'warning') ||
+                            (this.certFilter === 'expired' && cert.status === 'expired');
+                        
+                        return matchesSearch && matchesFilter;
+                    });
+                }
+            },
+            mounted() {
+                // 默认选择第一个证书
+                if (this.certs.length > 0) {
+                    this.selectedCert = {...this.certs[0]};
+                }
+            },
+            methods: {
+                // IP管理方法
+                openIpDialog(mode, ip = null) {
+                    this.ipDialogMode = mode;
+                    
+                    if (mode === 'edit' && ip) {
+                        this.currentIp = {...ip};
+                    } else {
+                        this.currentIp = {
+                            id: null,
+                            ip: '',
+                            session: '',
+                            location: '',
+                            description: '',
+                            status: 'active',
+                            lastActive: new Date().toLocaleString(),
+                            addedBy: '管理员'
+                        };
+                    }
+                    
+                    this.ipDialogVisible = true;
+                },
+                
+                saveIp() {
+                    if (this.ipDialogMode === 'add') {
+                        const newId = Math.max(...this.ips.map(ip => ip.id), 0) + 1;
+                        this.currentIp.id = newId;
+                        this.ips.push({...this.currentIp});
+                        this.$message.success('IP地址已添加');
+                    } else {
+                        const index = this.ips.findIndex(ip => ip.id === this.currentIp.id);
+                        if (index !== -1) {
+                            this.ips.splice(index, 1, {...this.currentIp});
+                            this.$message.success('IP地址已更新');
+                        }
+                    }
+                    
+                    this.ipDialogVisible = false;
+                },
+                
+                deleteIp(ip) {
+                    this.$confirm(`确定要删除IP地址 "${ip.ip}" 吗?`, '删除确认', {
+                        confirmButtonText: '删除',
+                        cancelButtonText: '取消',
+                        type: 'warning'
+                    }).then(() => {
+                        const index = this.ips.findIndex(i => i.id === ip.id);
+                        if (index !== -1) {
+                            this.ips.splice(index, 1);
+                            this.$message.success('IP地址已删除');
+                        }
+                    }).catch(() => {});
+                },
+                
+                testIp(ip) {
+                    this.$message.info(`正在测试IP: ${ip.ip}`);
+                    setTimeout(() => {
+                        this.$message.success(`IP连接测试成功: ${ip.ip}`);
+                    }, 1000);
+                },
+                
+                importIps() {
+                    this.$message.success('IP地址导入成功');
+                    this.showBulkImport = false;
+                    
+                    // 模拟添加新IP
+                    this.ips.push({
+                        id: this.ips.length + 1,
+                        ip: '203.0.113.100',
+                        session: 'New Session',
+                        status: 'active',
+                        statusText: '活跃',
+                        lastActive: new Date().toLocaleString(),
+                        location: '新增位置',
+                        addedBy: '批量导入'
+                    });
+                },
+                
+                // 证书管理方法
+                openCertDialog(mode, cert = null) {
+                    // 在实际应用中实现类似IP对话框的功能
+                    this.$message.info('打开证书编辑对话框');
+                },
+                
+                downloadCert(cert) {
+                    this.$message.success(`正在下载证书: ${cert.name}`);
+                    // 模拟下载延迟
+                    setTimeout(() => {
+                        this.$message.success(`证书下载完成: ${cert.name}`);
+                    }, 1500);
+                },
+                
+                renewCert(cert) {
+                    this.$message.info(`正在更新证书: ${cert.name}`);
+                    // 模拟更新过程
+                    setTimeout(() => {
+                        this.$message.success(`证书更新成功: ${cert.name}`);
+                        
+                        // 更新证书状态
+                        if (cert.status === 'warning' || cert.status === 'expired') {
+                            const index = this.certs.findIndex(c => c.id === cert.id);
+                            if (index !== -1) {
+                                this.certs[index].status = 'active';
+                                this.certs[index].statusText = '有效';
+                                this.certs[index].statusColor = '#52c41a';
+                                this.certs[index].validTo = '2024-12-31';
+                                this.certs[index].validPercentage = 78;
+                                this.certs[index].validStatus = 'success';
+                            }
+                        }
+                    }, 2000);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
