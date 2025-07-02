@@ -1,0 +1,21 @@
+<dependencies>
+    <!-- Spring Boot WebSocket -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-websocket</artifactId>
+    </dependency>
+    
+    <!-- QuickFIX/J -->
+    <dependency>
+        <groupId>org.quickfixj</groupId>
+        <artifactId>quickfixj-core</artifactId>
+        <version>2.3.0</version>
+    </dependency>
+    
+    <!-- Socket.IO Server -->
+    <dependency>
+        <groupId>com.corundumstudio.socketio</groupId>
+        <artifactId>netty-socketio</artifactId>
+        <version>1.7.19</version>
+    </dependency>
+</dependencies>
