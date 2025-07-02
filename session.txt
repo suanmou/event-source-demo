@@ -1,0 +1,237 @@
+import quickfix.*;
+import quickfix.mina.acceptor.DynamicAcceptorSessionProvider;
+
+public class DynamicAcceptorServer {
+
+    public static void main(String[] args) throws ConfigError {
+        // 1. 加载基础配置
+        SessionSettings settings = new SessionSettings("acceptor.cfg");
+        
+        // 2. 创建核心组件
+        Application application = new DynamicFixApplication();
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new FileLogFactory(settings);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+
+        // 3. 收集会话模板
+        List<SessionSettings> sessionTemplates = new ArrayList<>();
+        for (SessionID sessionId : settings.getSessions()) {
+            if (settings.isSetting(sessionId, "AcceptorTemplate") && 
+                settings.getBool(sessionId, "AcceptorTemplate")) {
+                sessionTemplates.add(settings.getSessionSettings(sessionId));
+            }
+        }
+
+        // 4. 创建动态会话提供者
+        DynamicAcceptorSessionProvider provider = new DynamicAcceptorSessionProvider(
+            settings, 
+            sessionTemplates, 
+            application, 
+            storeFactory, 
+            logFactory, 
+            messageFactory
+        );
+
+        // 5. 启动Acceptor
+        SocketAcceptor acceptor = new SocketAcceptor(provider);
+        acceptor.start();
+        System.out.println("动态Acceptor已启动，监听端口: " + 
+                          settings.getString(SessionSettings.SOCKET_ACCEPT_PORT));
+    }
+    
+    // 自定义应用处理逻辑
+    private static class DynamicFixApplication extends MessageCracker implements Application {
+        @Override
+        public void onLogon(SessionID sessionId) {
+            System.out.println("[动态会话] 登录成功: " + sessionId);
+            System.out.println("当前活跃会话: " + Session.lookupSession(sessionId).getSessions());
+        }
+        
+        @Override
+        public void fromApp(Message message, SessionID sessionId) {
+            System.out.printf("收到来自 %s 的消息: %s%n", sessionId, message);
+        }
+    }
+}
+
+
+// 动态客户端连接器
+public class DynamicClientConnector {
+    public static void connectNewClient(String clientId) throws ConfigError {
+        // 动态生成配置文件
+        Properties props = new Properties();
+        props.setProperty("ConnectionType", "initiator");
+        props.setProperty("SocketConnectHost", "127.0.0.1");
+        props.setProperty("SocketConnectPort", "10001");
+        props.setProperty("HeartBtInt", "30");
+        props.setProperty("SenderCompID", clientId); // 动态客户端ID
+        props.setProperty("TargetCompID", "SERVER");
+        
+        SessionSettings settings = new SessionSettings(props);
+        Application clientApp = new ClientApplication();
+        
+        SocketInitiator initiator = new SocketInitiator(
+            clientApp, 
+            new MemoryStoreFactory(), 
+            settings, 
+            new ScreenLogFactory(), 
+            new DefaultMessageFactory()
+        );
+        
+        initiator.start();
+        System.out.println("客户端 " + clientId + " 已连接");
+    }
+    
+    // 测试连接多个客户端
+    public static void main(String[] args) {
+        ExecutorService executor = Executors.newCachedThreadPool();
+        for (int i = 1; i <= 5; i++) {
+            String clientId = "CLIENT_" + i;
+            executor.execute(() -> {
+                try {
+                    connectNewClient(clientId);
+                } catch (ConfigError e) {
+                    e.printStackTrace();
+                }
+            });
+        }
+    }
+}
+
+
+// 动态管理会话状态
+public class SessionManager {
+    // 获取所有活跃会话
+    public static Collection<SessionID> getActiveSessions() {
+        return Session.lookupSessions();
+    }
+    
+    // 优雅断开指定会话
+    public static void disconnectSession(SessionID sessionId) {
+        Session session = Session.lookupSession(sessionId);
+        if (session != null) {
+            session.logout();
+            System.out.println("已断开会话: " + sessionId);
+        }
+    }
+    
+    // 广播消息给所有会话
+    public static void broadcast(Message message) {
+        for (SessionID sessionId : Session.lookupSessions()) {
+            try {
+                Session.sendToTarget(message, sessionId);
+            } catch (SessionNotFound e) {
+                System.err.println("会话不存在: " + sessionId);
+            }
+        }
+    }
+}
+
+
+// 增强的Application实现
+public class SecureDynamicApplication extends MessageCracker implements Application {
+    
+    private final AuthService authService; // 自定义认证服务
+    
+    @Override
+    public void fromAdmin(Message message, SessionID sessionId) {
+        // 拦截Logon消息进行认证
+        if (message instanceof Logon) {
+            Logon logon = (Logon) message;
+            String username = logon.getString(Username.FIELD);
+            String password = logon.getString(Password.FIELD);
+            
+            if (!authService.authenticate(username, password)) {
+                throw new RejectLogon("认证失败");
+            }
+            
+            // 记录客户端信息
+            System.out.printf("客户端 %s 认证成功 (IP: %s)%n", 
+                sessionId.getSenderCompID(),
+                Session.lookupSession(sessionId).getRemoteAddress());
+        }
+    }
+}
+
+# acceptor.cfg 性能相关配置
+[default]
+# 使用更快的存储引擎
+MessageStoreFactory=quickfix.store.JdbcStoreFactory
+
+# 调整线程模型
+ThreadModel=THREAD_PER_SESSION
+
+
+// 会话资源监控器
+public class SessionMonitor implements Runnable {
+    @Override
+    public void run() {
+        while (true) {
+            System.out.println("===== 会话状态监控 =====");
+            System.out.println("当前会话数: " + Session.lookupSessions().size());
+            
+            for (SessionID sessionId : Session.lookupSessions()) {
+                Session session = Session.lookupSession(sessionId);
+                System.out.printf("会话 %s: [状态: %s, 最后活动: %tc]%n",
+                    sessionId, 
+                    session.isLoggedOn() ? "在线" : "离线",
+                    session.getLastActivityTime()
+                );
+            }
+            try {
+                Thread.sleep(30000); // 每30秒监控一次
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+}
+
+// 在DynamicAcceptorSessionProvider中添加会话限制
+public class ThrottledSessionProvider extends DynamicAcceptorSessionProvider {
+    private static final int MAX_SESSIONS = 100;
+    
+    @Override
+    public Session getSession(SessionID sessionId) {
+        if (Session.lookupSessions().size() >= MAX_SESSIONS) {
+            throw new SessionException("已达到最大会话数限制");
+        }
+        return super.getSession(sessionId);
+    }
+}
+
+
+// Prometheus监控集成
+public class SessionMetrics {
+    private static final Counter loginCounter = Counter.build()
+        .name("fix_logins_total")
+        .help("Total FIX logins")
+        .register();
+    
+    private static final Gauge activeSessions = Gauge.build()
+        .name("fix_active_sessions")
+        .help("Active FIX sessions")
+        .register();
+    
+    public static void onLogin(SessionID sessionId) {
+        loginCounter.inc();
+        activeSessions.set(Session.lookupSessions().size());
+    }
+}
+
+# acceptor.cfg
+[default]
+ConnectionType=acceptor
+SocketAcceptPort=10001
+FileStorePath=store
+FileLogPath=log
+HeartBtInt=30
+
+# 动态会话模板 (关键配置)
+[session:CLIENT_TEMPLATE]
+AcceptorTemplate=Y           # 标记为模板
+BeginString=FIX.4.4
+SenderCompID=SERVER
+TargetCompID=*               # 通配符匹配任意ClientID
+UseDataDictionary=Y
+DataDictionary=FIX44.xml
