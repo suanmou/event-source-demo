@@ -765,3 +765,503 @@ public class WebSocketLogFactory implements LogFactory {
         public void clear() {}
     }
 }
+
+
+
+import quickfix.*;
+import quickfix.field.*;
+import quickfix.fix44.*;
+
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class MockFixServer implements Application {
+    // 存储会话状态
+    private final Map<SessionID, SessionState> sessionStates = new HashMap<>();
+    private final AtomicInteger orderIdCounter = new AtomicInteger(10000);
+    private final Random random = new Random();
+    
+    // 存储市场数据
+    private final Map<String, MarketData> marketDataMap = new HashMap<>();
+    
+    public MockFixServer() {
+        // 初始化市场数据
+        initializeMarketData();
+    }
+    
+    private void initializeMarketData() {
+        marketDataMap.put("EUR/USD", new MarketData(1.0850, 1.0852, 1.0848, 1.0855));
+        marketDataMap.put("GBP/USD", new MarketData(1.2700, 1.2702, 1.2695, 1.2705));
+        marketDataMap.put("USD/JPY", new MarketData(147.50, 147.52, 147.45, 147.55));
+        marketDataMap.put("XAU/USD", new MarketData(2020.00, 2020.50, 2019.50, 2021.00));
+    }
+
+    @Override
+    public void onCreate(SessionID sessionId) {
+        System.out.println("FIX Server: 创建新会话: " + sessionId);
+        sessionStates.put(sessionId, new SessionState());
+    }
+
+    @Override
+    public void onLogon(SessionID sessionId) {
+        System.out.println("FIX Server: 客户端登录成功: " + sessionId);
+        SessionState state = getSessionState(sessionId);
+        state.setLoggedOn(true);
+    }
+
+    @Override
+    public void onLogout(SessionID sessionId) {
+        System.out.println("FIX Server: 客户端登出: " + sessionId);
+        SessionState state = getSessionState(sessionId);
+        state.setLoggedOn(false);
+    }
+
+    @Override
+    public void toAdmin(Message message, SessionID sessionId) {
+        // 处理管理消息（Logon, Logout等）
+        System.out.println("FIX Server [toAdmin]: " + message);
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionId) throws FieldNotFound, IncorrectTagValue, RejectLogon {
+        // 处理管理消息
+        System.out.println("FIX Server [fromAdmin]: " + message);
+        
+        if (message instanceof Logon) {
+            handleLogon((Logon) message, sessionId);
+        } else if (message instanceof Logout) {
+            handleLogout((Logout) message, sessionId);
+        } else if (message instanceof Heartbeat) {
+            handleHeartbeat((Heartbeat) message, sessionId);
+        } else if (message instanceof TestRequest) {
+            handleTestRequest((TestRequest) message, sessionId);
+        }
+    }
+
+    @Override
+    public void toApp(Message message, SessionID sessionId) {
+        // 发送应用消息前处理
+        System.out.println("FIX Server [toApp]: " + message);
+    }
+
+    @Override
+    public void fromApp(Message message, SessionID sessionId) throws FieldNotFound, IncorrectTagValue, UnsupportedMessageType {
+        // 处理应用消息
+        System.out.println("FIX Server [fromApp]: " + message);
+        
+        if (message instanceof NewOrderSingle) {
+            handleNewOrderSingle((NewOrderSingle) message, sessionId);
+        } else if (message instanceof MarketDataRequest) {
+            handleMarketDataRequest((MarketDataRequest) message, sessionId);
+        } else if (message instanceof QuoteRequest) {
+            handleQuoteRequest((QuoteRequest) message, sessionId);
+        }
+    }
+    
+    // ========== 消息处理逻辑 ==========
+    
+    private void handleLogon(Logon logon, SessionID sessionId) throws FieldNotFound {
+        SessionState state = getSessionState(sessionId);
+        
+        // 验证用户名/密码（如果有）
+        if (logon.isSetField(Username.FIELD) && logon.isSetField(Password.FIELD)) {
+            String username = logon.getString(Username.FIELD);
+            String password = logon.getString(Password.FIELD);
+            
+            if (!"valid_user".equals(username) || !"valid_pass".equals(password)) {
+                throw new RejectLogon("Invalid credentials");
+            }
+        }
+        
+        // 发送Logon响应
+        Logon response = new Logon();
+        response.setInt(HeartBtInt.FIELD, logon.getInt(HeartBtInt.FIELD));
+        response.setUtcTimeStamp(TransactTime.FIELD, new Date());
+        
+        try {
+            Session.sendToTarget(response, sessionId);
+            System.out.println("FIX Server: 发送Logon响应");
+        } catch (SessionNotFound e) {
+            System.err.println("FIX Server: 无法发送Logon响应: " + e.getMessage());
+        }
+    }
+    
+    private void handleLogout(Logout logout, SessionID sessionId) {
+        // 发送Logout响应
+        Logout response = new Logout();
+        if (logout.isSetField(Text.FIELD)) {
+            try {
+                response.setString(Text.FIELD, "Logout confirmed: " + logout.getString(Text.FIELD));
+            } catch (FieldNotFound e) {
+                // 忽略
+            }
+        } else {
+            response.setString(Text.FIELD, "Logout confirmed");
+        }
+        
+        try {
+            Session.sendToTarget(response, sessionId);
+            System.out.println("FIX Server: 发送Logout响应");
+        } catch (SessionNotFound e) {
+            System.err.println("FIX Server: 无法发送Logout响应: " + e.getMessage());
+        }
+    }
+    
+    private void handleHeartbeat(Heartbeat heartbeat, SessionID sessionId) throws FieldNotFound {
+        // 如果有TestReqID，需要响应
+        if (heartbeat.isSetField(TestReqID.FIELD)) {
+            String testReqId = heartbeat.getString(TestReqID.FIELD);
+            
+            Heartbeat response = new Heartbeat();
+            response.setString(TestReqID.FIELD, testReqId);
+            
+            try {
+                Session.sendToTarget(response, sessionId);
+                System.out.println("FIX Server: 发送心跳响应: " + testReqId);
+            } catch (SessionNotFound e) {
+                System.err.println("FIX Server: 无法发送心跳响应: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void handleTestRequest(TestRequest testRequest, SessionID sessionId) throws FieldNotFound {
+        String testReqId = testRequest.getString(TestReqID.FIELD);
+        
+        // 发送心跳响应
+        Heartbeat response = new Heartbeat();
+        response.setString(TestReqID.FIELD, testReqId);
+        
+        try {
+            Session.sendToTarget(response, sessionId);
+            System.out.println("FIX Server: 发送测试请求响应: " + testReqId);
+        } catch (SessionNotFound e) {
+            System.err.println("FIX Server: 无法发送测试响应: " + e.getMessage());
+        }
+    }
+    
+    private void handleNewOrderSingle(NewOrderSingle order, SessionID sessionId) throws FieldNotFound {
+        ExecutionReport report = new ExecutionReport();
+        
+        // 设置基本字段
+        report.setString(OrderID.FIELD, "ORD" + orderIdCounter.incrementAndGet());
+        report.setString(ClOrdID.FIELD, order.getString(ClOrdID.FIELD));
+        report.setString(Symbol.FIELD, order.getString(Symbol.FIELD));
+        report.setChar(OrdStatus.FIELD, OrdStatus.NEW);
+        report.setChar(ExecType.FIELD, ExecType.NEW);
+        report.setChar(Side.FIELD, order.getChar(Side.FIELD));
+        report.setDouble(OrderQty.FIELD, order.getDouble(OrderQty.FIELD));
+        report.setUtcTimeStamp(TransactTime.FIELD, new Date());
+        
+        // 设置价格
+        if (order.isSetField(Price.FIELD)) {
+            double price = order.getDouble(Price.FIELD);
+            report.setDouble(Price.FIELD, price);
+            report.setDouble(LastPx.FIELD, price);
+        } else {
+            // 市价单 - 使用当前市场价
+            MarketData data = getMarketData(order.getString(Symbol.FIELD));
+            double marketPrice = data.getMidPrice();
+            report.setDouble(LastPx.FIELD, marketPrice);
+        }
+        
+        // 设置累计数量
+        report.setDouble(CumQty.FIELD, 0.0);
+        report.setDouble(AvgPx.FIELD, 0.0);
+        
+        try {
+            Session.sendToTarget(report, sessionId);
+            System.out.println("FIX Server: 发送新订单执行报告");
+            
+            // 模拟订单成交
+            simulateOrderExecution(order, sessionId);
+            
+        } catch (SessionNotFound e) {
+            System.err.println("FIX Server: 无法发送执行报告: " + e.getMessage());
+        }
+    }
+    
+    private void simulateOrderExecution(NewOrderSingle order, SessionID sessionId) throws FieldNotFound {
+        // 随机决定是否部分成交或完全成交
+        double fillRatio = 0.3 + random.nextDouble() * 0.7; // 30%-100% 成交
+        double orderQty = order.getDouble(OrderQty.FIELD);
+        double fillQty = Math.floor(orderQty * fillRatio);
+        
+        ExecutionReport report = new ExecutionReport();
+        
+        // 设置基本字段
+        report.setString(OrderID.FIELD, "ORD" + orderIdCounter.get()); // 使用相同的订单ID
+        report.setString(ClOrdID.FIELD, order.getString(ClOrdID.FIELD));
+        report.setString(Symbol.FIELD, order.getString(Symbol.FIELD));
+        report.setChar(Side.FIELD, order.getChar(Side.FIELD));
+        report.setDouble(OrderQty.FIELD, orderQty);
+        
+        // 设置价格
+        if (order.isSetField(Price.FIELD)) {
+            double price = order.getDouble(Price.FIELD);
+            report.setDouble(Price.FIELD, price);
+            report.setDouble(LastPx.FIELD, price);
+        } else {
+            // 市价单 - 使用当前市场价
+            MarketData data = getMarketData(order.getString(Symbol.FIELD));
+            double marketPrice = data.getMidPrice();
+            report.setDouble(LastPx.FIELD, marketPrice);
+        }
+        
+        // 设置成交状态
+        if (fillQty >= orderQty) {
+            report.setChar(OrdStatus.FIELD, OrdStatus.FILLED);
+            report.setChar(ExecType.FIELD, ExecType.FILL);
+            report.setDouble(CumQty.FIELD, orderQty);
+            report.setDouble(LastQty.FIELD, orderQty);
+        } else {
+            report.setChar(OrdStatus.FIELD, OrdStatus.PARTIALLY_FILLED);
+            report.setChar(ExecType.FIELD, ExecType.PARTIAL_FILL);
+            report.setDouble(CumQty.FIELD, fillQty);
+            report.setDouble(LastQty.FIELD, fillQty);
+        }
+        
+        report.setDouble(AvgPx.FIELD, report.getDouble(LastPx.FIELD));
+        report.setUtcTimeStamp(TransactTime.FIELD, new Date());
+        
+        try {
+            Thread.sleep(500); // 模拟处理延迟
+            Session.sendToTarget(report, sessionId);
+            System.out.println("FIX Server: 发送订单成交报告");
+        } catch (Exception e) {
+            System.err.println("FIX Server: 无法发送成交报告: " + e.getMessage());
+        }
+    }
+    
+    private void handleMarketDataRequest(MarketDataRequest request, SessionID sessionId) throws FieldNotFound {
+        String mdReqId = request.getString(MDReqID.FIELD);
+        int subscriptionType = request.getInt(SubscriptionRequestType.FIELD);
+        int marketDepth = request.getInt(MarketDepth.FIELD);
+        
+        // 获取请求的交易品种
+        MarketDataRequest.NoRelatedSym noRelatedSym = new MarketDataRequest.NoRelatedSym();
+        request.getGroup(1, noRelatedSym);
+        String symbol = noRelatedSym.getString(Symbol.FIELD);
+        
+        MarketDataSnapshotFullRefresh snapshot = new MarketDataSnapshotFullRefresh();
+        snapshot.setString(MDReqID.FIELD, mdReqId);
+        snapshot.setString(Symbol.FIELD, symbol);
+        
+        // 添加市场数据条目
+        MarketData data = getMarketData(symbol);
+        
+        // 添加买价
+        MarketDataSnapshotFullRefresh.NoMDEntries bidEntry = new MarketDataSnapshotFullRefresh.NoMDEntries();
+        bidEntry.setChar(MDEntryType.FIELD, MDEntryType.BID);
+        bidEntry.setDouble(MDEntryPx.FIELD, data.getBid());
+        bidEntry.setDouble(MDEntrySize.FIELD, 1000000); // 100万单位
+        snapshot.addGroup(bidEntry);
+        
+        // 添加卖价
+        MarketDataSnapshotFullRefresh.NoMDEntries offerEntry = new MarketDataSnapshotFullRefresh.NoMDEntries();
+        offerEntry.setChar(MDEntryType.FIELD, MDEntryType.OFFER);
+        offerEntry.setDouble(MDEntryPx.FIELD, data.getAsk());
+        offerEntry.setDouble(MDEntrySize.FIELD, 1000000); // 100万单位
+        snapshot.addGroup(offerEntry);
+        
+        // 添加当日最高价
+        MarketDataSnapshotFullRefresh.NoMDEntries highEntry = new MarketDataSnapshotFullRefresh.NoMDEntries();
+        highEntry.setChar(MDEntryType.FIELD, MDEntryType.TRADE);
+        highEntry.setChar(MDEntryPx.FIELD, MDEntryType.HIGH);
+        highEntry.setDouble(MDEntryPx.FIELD, data.getHigh());
+        highEntry.setDouble(MDEntrySize.FIELD, 0); // 没有成交量
+        snapshot.addGroup(highEntry);
+        
+        // 添加当日最低价
+        MarketDataSnapshotFullRefresh.NoMDEntries lowEntry = new MarketDataSnapshotFullRefresh.NoMDEntries();
+        lowEntry.setChar(MDEntryType.FIELD, MDEntryType.TRADE);
+        lowEntry.setChar(MDEntryPx.FIELD, MDEntryType.LOW);
+        lowEntry.setDouble(MDEntryPx.FIELD, data.getLow());
+        lowEntry.setDouble(MDEntrySize.FIELD, 0); // 没有成交量
+        snapshot.addGroup(lowEntry);
+        
+        try {
+            Session.sendToTarget(snapshot, sessionId);
+            System.out.println("FIX Server: 发送市场数据快照: " + symbol);
+            
+            // 如果是订阅类型，模拟后续更新
+            if (subscriptionType == SubscriptionRequestType.SNAPSHOT_PLUS_UPDATES) {
+                simulateMarketDataUpdates(mdReqId, symbol, sessionId);
+            }
+        } catch (SessionNotFound e) {
+            System.err.println("FIX Server: 无法发送市场数据: " + e.getMessage());
+        }
+    }
+    
+    private void simulateMarketDataUpdates(String mdReqId, String symbol, SessionID sessionId) {
+        new Thread(() -> {
+            try {
+                MarketData data = getMarketData(symbol);
+                
+                // 发送3次更新
+                for (int i = 0; i < 3; i++) {
+                    Thread.sleep(2000); // 2秒间隔
+                    
+                    // 小幅波动市场数据
+                    double spread = 0.0002 + random.nextDouble() * 0.0003;
+                    double mid = data.getMidPrice() * (0.9999 + random.nextDouble() * 0.0002);
+                    double newBid = mid - spread / 2;
+                    double newAsk = mid + spread / 2;
+                    
+                    // 更新市场数据
+                    data.setBid(newBid);
+                    data.setAsk(newAsk);
+                    
+                    // 创建市场数据增量刷新消息
+                    MarketDataIncrementalRefresh refresh = new MarketDataIncrementalRefresh();
+                    refresh.setString(MDReqID.FIELD, mdReqId);
+                    
+                    // 添加买价更新
+                    MarketDataIncrementalRefresh.NoMDEntries bidEntry = new MarketDataIncrementalRefresh.NoMDEntries();
+                    bidEntry.setChar(MDUpdateAction.FIELD, MDUpdateAction.CHANGE);
+                    bidEntry.setChar(MDEntryType.FIELD, MDEntryType.BID);
+                    bidEntry.setDouble(MDEntryPx.FIELD, newBid);
+                    bidEntry.setDouble(MDEntrySize.FIELD, 1000000);
+                    refresh.addGroup(bidEntry);
+                    
+                    // 添加卖价更新
+                    MarketDataIncrementalRefresh.NoMDEntries askEntry = new MarketDataIncrementalRefresh.NoMDEntries();
+                    askEntry.setChar(MDUpdateAction.FIELD, MDUpdateAction.CHANGE);
+                    askEntry.setChar(MDEntryType.FIELD, MDEntryType.OFFER);
+                    askEntry.setDouble(MDEntryPx.FIELD, newAsk);
+                    askEntry.setDouble(MDEntrySize.FIELD, 1000000);
+                    refresh.addGroup(askEntry);
+                    
+                    Session.sendToTarget(refresh, sessionId);
+                    System.out.println("FIX Server: 发送市场数据更新: " + symbol);
+                }
+            } catch (Exception e) {
+                System.err.println("FIX Server: 市场数据更新失败: " + e.getMessage());
+            }
+        }).start();
+    }
+    
+    private void handleQuoteRequest(QuoteRequest request, SessionID sessionId) throws FieldNotFound {
+        String quoteReqId = request.getString(QuoteReqID.FIELD);
+        String symbol = request.getString(Symbol.FIELD);
+        
+        Quote quote = new Quote();
+        quote.setString(QuoteReqID.FIELD, quoteReqId);
+        quote.setString(QuoteID.FIELD, "Q" + System.currentTimeMillis());
+        quote.setString(Symbol.FIELD, symbol);
+        quote.setUtcTimeStamp(TransactTime.FIELD, new Date());
+        
+        MarketData data = getMarketData(symbol);
+        quote.setDouble(BidPx.FIELD, data.getBid());
+        quote.setDouble(OfferPx.FIELD, data.getAsk());
+        quote.setDouble(BidSize.FIELD, 1000000);
+        quote.setDouble(OfferSize.FIELD, 1000000);
+        
+        try {
+            Session.sendToTarget(quote, sessionId);
+            System.out.println("FIX Server: 发送报价响应: " + symbol);
+        } catch (SessionNotFound e) {
+            System.err.println("FIX Server: 无法发送报价: " + e.getMessage());
+        }
+    }
+    
+    // ========== 辅助方法 ==========
+    
+    private SessionState getSessionState(SessionID sessionId) {
+        return sessionStates.computeIfAbsent(sessionId, k -> new SessionState());
+    }
+    
+    private MarketData getMarketData(String symbol) {
+        MarketData data = marketDataMap.get(symbol);
+        if (data == null) {
+            // 如果未找到，创建默认数据
+            data = new MarketData(1.0, 1.0002, 0.9998, 1.0005);
+            marketDataMap.put(symbol, data);
+        }
+        return data;
+    }
+    
+    // 会话状态类
+    private static class SessionState {
+        private boolean loggedOn;
+        
+        public SessionState() {
+            this.loggedOn = false;
+        }
+        
+        public boolean isLoggedOn() {
+            return loggedOn;
+        }
+        
+        public void setLoggedOn(boolean loggedOn) {
+            this.loggedOn = loggedOn;
+        }
+    }
+    
+    // 市场数据类
+    private static class MarketData {
+        private double bid;
+        private double ask;
+        private final double low;
+        private final double high;
+        
+        public MarketData(double bid, double ask, double low, double high) {
+            this.bid = bid;
+            this.ask = ask;
+            this.low = low;
+            this.high = high;
+        }
+        
+        public double getBid() {
+            return bid;
+        }
+        
+        public void setBid(double bid) {
+            this.bid = bid;
+        }
+        
+        public double getAsk() {
+            return ask;
+        }
+        
+        public void setAsk(double ask) {
+            this.ask = ask;
+        }
+        
+        public double getMidPrice() {
+            return (bid + ask) / 2;
+        }
+        
+        public double getLow() {
+            return low;
+        }
+        
+        public double getHigh() {
+            return high;
+        }
+    }
+
+    // ========== 启动服务器 ==========
+    
+    public static void main(String[] args) throws ConfigError, InterruptedException {
+        String configFile = "mock_fix_server.cfg";
+        SessionSettings settings = new SessionSettings(configFile);
+        
+        Application application = new MockFixServer();
+        MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+        LogFactory logFactory = new ScreenLogFactory(true, true, true);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+        
+        SocketAcceptor acceptor = new SocketAcceptor(
+            application, storeFactory, settings, logFactory, messageFactory);
+        
+        System.out.println("Starting FIX Server...");
+        acceptor.start();
+        
+        // 保持服务器运行
+        System.out.println("FIX Server is running. Press Ctrl+C to exit.");
+        Thread.currentThread().join();
+    }
+}
