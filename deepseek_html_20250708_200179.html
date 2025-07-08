@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FIX交易模拟测试工具</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: #1a1d23;
+      color: #e0e0e0;
+      line-height: 1.6;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    .app-container {
+      max-width: 1600px;
+      height: 100vh;
+      margin: 0 auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid #2a2e38;
+    }
+    
+    .header h1 {
+      color: #4a9ff5;
+      font-size: 24px;
+      font-weight: 500;
+      background: linear-gradient(90deg, #4a9ff5, #6ac0f0);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-shadow: 0 0 10px rgba(74, 159, 245, 0.3);
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      padding: 8px 15px;
+      border-radius: 20px;
+      background: #2a2e38;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+    
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+    
+    .status-disconnected {
+      background-color: #f56c6c;
+      box-shadow: 0 0 8px rgba(245, 108, 108, 0.6);
+    }
+    
+    .status-connected {
+      background-color: #67c23a;
+      box-shadow: 0 0 8px rgba(103, 194, 58, 0.6);
+    }
+    
+    .main-content {
+      display: flex;
+      flex: 1;
+      gap: 20px;
+      overflow: hidden;
+    }
+    
+    .control-panel {
+      flex: 0 0 350px;
+      background: #252a33;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #343a45;
+    }
+    
+    .display-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      overflow: hidden;
+    }
+    
+    .panel-title {
+      font-size: 18px;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #343a45;
+      color: #c1c9d6;
+      display: flex;
+      align-items: center;
+    }
+    
+    .panel-title i {
+      margin-right: 10px;
+      color: #4a9ff5;
+    }
+    
+    .form-section {
+      margin-bottom: 25px;
+    }
+    
+    .form-section h3 {
+      font-size: 16px;
+      margin-bottom: 15px;
+      color: #8a94a6;
+    }
+    
+    .el-form-item {
+      margin-bottom: 18px;
+    }
+    
+    .action-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    
+    .market-data-container {
+      background: #252a33;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      padding: 20px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #343a45;
+      overflow: hidden;
+    }
+    
+    .orders-container {
+      background: #252a33;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      padding: 20px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #343a45;
+      overflow: hidden;
+    }
+    
+    .logs-container {
+      background: #1e2229;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      padding: 20px;
+      height: 300px;
+      overflow-y: auto;
+      font-family: 'Consolas', 'Courier New', monospace;
+      border: 1px solid #343a45;
+    }
+    
+    .market-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 15px;
+      margin-top: 15px;
+      overflow-y: auto;
+      padding-right: 5px;
+      flex: 1;
+    }
+    
+    .market-card {
+      background: #2e3440;
+      border: 1px solid #3a4250;
+      border-radius: 8px;
+      padding: 15px;
+      transition: all 0.3s;
+      position: relative;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+    
+    .market-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 6px 15px rgba(0, 0, 0, 0.3);
+      border-color: #4a9ff5;
+    }
+    
+    .symbol-name {
+      font-size: 18px;
+      font-weight: 500;
+      margin-bottom: 10px;
+      color: #4a9ff5;
+    }
+    
+    .price-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    
+    .bid-price, .ask-price {
+      font-size: 20px;
+      font-weight: bold;
+      font-family: 'Consolas', monospace;
+    }
+    
+    .bid-price {
+      color: #f56c6c;
+    }
+    
+    .ask-price {
+      color: #67c23a;
+    }
+    
+    .price-change {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      font-size: 14px;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-family: 'Consolas', monospace;
+    }
+    
+    .price-up {
+      background-color: rgba(103, 194, 58, 0.15);
+      color: #67c23a;
+    }
+    
+    .price-down {
+      background-color: rgba(245, 108, 108, 0.15);
+      color: #f56c6c;
+    }
+    
+    .orders-table {
+      width: 100%;
+      margin-top: 15px;
+      flex: 1;
+      overflow-y: auto;
+    }
+    
+    .order-row {
+      display: grid;
+      grid-template-columns: 120px 100px 100px 100px 1fr;
+      padding: 12px 0;
+      border-bottom: 1px solid #343a45;
+    }
+    
+    .order-header {
+      font-weight: bold;
+      background-color: #2e3440;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    
+    .buy-order {
+      color: #67c23a;
+    }
+    
+    .sell-order {
+      color: #f56c6c;
+    }
+    
+    .new-order {
+      background-color: rgba(74, 159, 245, 0.1);
+    }
+    
+    .filled-order {
+      background-color: rgba(103, 194, 58, 0.1);
+    }
+    
+    .rejected-order {
+      background-color: rgba(245, 108, 108, 0.1);
+    }
+    
+    .log-entry {
+      margin-bottom: 8px;
+      padding: 8px;
+      border-radius: 4px;
+      font-size: 13px;
+      background: #2a2e38;
+    }
+    
+    .log-timestamp {
+      color: #9cdcfe;
+      margin-right: 10px;
+      font-family: 'Consolas', monospace;
+    }
+    
+    .log-message {
+      word-break: break-all;
+    }
+    
+    .log-info {
+      color: #d4d4d4;
+    }
+    
+    .log-fix {
+      color: #4a9ff5;
+    }
+    
+    .log-order {
+      color: #67c23a;
+    }
+    
+    .log-quote {
+      color: #b37feb;
+    }
+    
+    .log-error {
+      color: #f56c6c;
+    }
+    
+    .log-warning {
+      color: #e6a23c;
+    }
+    
+    .log-system {
+      color: #5cadff;
+    }
+    
+    .log-session {
+      color: #ff85c0;
+    }
+    
+    .el-tabs__item {
+      font-size: 16px;
+      color: #8a94a6;
+    }
+    
+    .el-tabs__item.is-active {
+      color: #4a9ff5;
+    }
+    
+    .el-tabs__active-bar {
+      background-color: #4a9ff5;
+    }
+    
+    .el-divider {
+      margin: 20px 0;
+      background-color: #343a45;
+    }
+    
+    .el-button {
+      transition: all 0.3s;
+    }
+    
+    .el-button--primary {
+      background: linear-gradient(90deg, #4a9ff5, #5cadff);
+      border: none;
+    }
+    
+    .el-button--danger {
+      background: linear-gradient(90deg, #f56c6c, #ff7878);
+      border: none;
+    }
+    
+    .el-button--success {
+      background: linear-gradient(90deg, #67c23a, #7ed321);
+      border: none;
+    }
+    
+    .el-button--warning {
+      background: linear-gradient(90deg, #e6a23c, #f6b352);
+      border: none;
+    }
+    
+    .el-input__inner {
+      background: #2e3440;
+      border: 1px solid #3a4250;
+      color: #c1c9d6;
+    }
+    
+    .el-select .el-input .el-select__caret {
+      color: #4a9ff5;
+    }
+    
+    .el-tabs__nav-wrap::after {
+      background-color: #343a45;
+    }
+    
+    .el-card {
+      background: #252a33;
+      border: 1px solid #343a45;
+      color: #c1c9d6;
+    }
+    
+    .el-form-item__label {
+      color: #8a94a6;
+    }
+    
+    .el-input-group__append {
+      background: #2e3440;
+      border: 1px solid #3a4250;
+      color: #c1c9d6;
+    }
+    
+    .el-radio__input.is-checked .el-radio__inner {
+      background: #4a9ff5;
+      border-color: #4a9ff5;
+    }
+    
+    .el-radio__input.is-checked + .el-radio__label {
+      color: #4a9ff5;
+    }
+    
+    .order-status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    
+    .status-new {
+      background: rgba(74, 159, 245, 0.2);
+      color: #4a9ff5;
+    }
+    
+    .status-partial {
+      background: rgba(230, 162, 60, 0.2);
+      color: #e6a23c;
+    }
+    
+    .status-filled {
+      background: rgba(103, 194, 58, 0.2);
+      color: #67c23a;
+    }
+    
+    .status-rejected {
+      background: rgba(245, 108, 108, 0.2);
+      color: #f56c6c;
+    }
+    
+    .chart-container {
+      height: 100px;
+      margin-top: 10px;
+    }
+    
+    .chart-placeholder {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, #2e3440, #343c48);
+      border-radius: 4px;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .chart-line {
+      position: absolute;
+      bottom: 0;
+      width: 100%;
+      height: 60%;
+      background: linear-gradient(to top, rgba(74, 159, 245, 0.3), transparent);
+      clip-path: polygon(0% 100%, 100% 100%, 100% 20%, 75% 40%, 50% 30%, 25% 50%, 0% 35%);
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="app-container">
+      <div class="header">
+        <h1>FIX交易模拟测试工具</h1>
+        <div class="status-indicator">
+          <div class="status-dot" :class="connected ? 'status-connected' : 'status-disconnected'"></div>
+          <span>{{ connected ? '已连接至FIX网关' : '未连接' }}</span>
+        </div>
+      </div>
+      
+      <div class="main-content">
+        <div class="control-panel">
+          <el-tabs v-model="activeTab">
+            <el-tab-pane label="连接配置" name="connection">
+              <div class="form-section">
+                <h3>FIX连接配置</h3>
+                <el-form label-width="120px">
+                  <el-form-item label="FIX主机">
+                    <el-input v-model="config.host" placeholder="127.0.0.1"></el-input>
+                  </el-form-item>
+                  <el-form-item label="FIX端口">
+                    <el-input v-model.number="config.port" placeholder="5001"></el-input>
+                  </el-form-item>
+                  <el-form-item label="SenderCompID">
+                    <el-input v-model="config.senderCompId" placeholder="CLIENT"></el-input>
+                  </el-form-item>
+                  <el-form-item label="TargetCompID">
+                    <el-input v-model="config.targetCompId" placeholder="SERVER"></el-input>
+                  </el-form-item>
+                  <el-form-item label="用户名">
+                    <el-input v-model="config.username" placeholder="可选"></el-input>
+                  </el-form-item>
+                  <el-form-item label="密码">
+                    <el-input v-model="config.password" type="password" placeholder="可选"></el-input>
+                  </el-form-item>
+                </el-form>
+                
+                <div class="action-buttons">
+                  <el-button 
+                    type="primary" 
+                    @click="connect" 
+                    :disabled="connected"
+                    icon="el-icon-connection"
+                  >建立连接</el-button>
+                  <el-button 
+                    type="danger" 
+                    @click="disconnect" 
+                    :disabled="!connected"
+                    icon="el-icon-switch-button"
+                  >断开连接</el-button>
+                </div>
+              </div>
+              
+              <el-divider></el-divider>
+              
+              <div class="form-section">
+                <h3>会话管理</h3>
+                <div class="action-buttons">
+                  <el-button 
+                    type="primary" 
+                    @click="sendLogon" 
+                    :disabled="!connected"
+                    icon="el-icon-s-promotion"
+                  >发送Logon</el-button>
+                  <el-button 
+                    type="info" 
+                    @click="sendLogout" 
+                    :disabled="!connected"
+                    icon="el-icon-switch-button"
+                  >发送Logout</el-button>
+                  <el-button 
+                    type="success" 
+                    @click="sendHeartbeat" 
+                    :disabled="!connected"
+                    icon="el-icon-cpu"
+                  >发送心跳</el-button>
+                </div>
+              </div>
+            </el-tab-pane>
+            
+            <el-tab-pane label="市场数据" name="marketData">
+              <div class="form-section">
+                <h3>请求市场数据</h3>
+                <el-form label-width="120px">
+                  <el-form-item label="交易品种">
+                    <el-select v-model="marketDataRequest.symbol" placeholder="请选择">
+                      <el-option label="EUR/USD" value="EUR/USD"></el-option>
+                      <el-option label="GBP/USD" value="GBP/USD"></el-option>
+                      <el-option label="USD/JPY" value="USD/JPY"></el-option>
+                      <el-option label="XAU/USD" value="XAU/USD"></el-option>
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="订阅类型">
+                    <el-radio-group v-model="marketDataRequest.subscriptionType">
+                      <el-radio :label="1">快照+更新</el-radio>
+                      <el-radio :label="2">仅快照</el-radio>
+                    </el-radio-group>
+                  </el-form-item>
+                </el-form>
+                
+                <div class="action-buttons">
+                  <el-button 
+                    type="primary" 
+                    @click="sendMarketDataRequest" 
+                    :disabled="!connected"
+                    icon="el-icon-data-line"
+                  >发送行情请求</el-button>
+                </div>
+              </div>
+            </el-tab-pane>
+            
+            <el-tab-pane label="订单管理" name="orders">
+              <div class="form-section">
+                <h3>创建新订单</h3>
+                <el-form label-width="120px">
+                  <el-form-item label="订单ID">
+                    <el-input v-model="newOrder.clOrdId" placeholder="自动生成">
+                      <el-button slot="append" @click="generateOrderId">生成</el-button>
+                    </el-input>
+                  </el-form-item>
+                  <el-form-item label="交易品种">
+                    <el-select v-model="newOrder.symbol" placeholder="请选择">
+                      <el-option label="EUR/USD" value="EUR/USD"></el-option>
+                      <el-option label="GBP/USD" value="GBP/USD"></el-option>
+                      <el-option label="USD/JPY" value="USD/JPY"></el-option>
+                      <el-option label="XAU/USD" value="XAU/USD"></el-option>
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="方向">
+                    <el-radio-group v-model="newOrder.side">
+                      <el-radio label="1">买入</el-radio>
+                      <el-radio label="2">卖出</el-radio>
+                    </el-radio-group>
+                  </el-form-item>
+                  <el-form-item label="订单类型">
+                    <el-radio-group v-model="newOrder.ordType">
+                      <el-radio label="1">市价单</el-radio>
+                      <el-radio label="2">限价单</el-radio>
+                    </el-radio-group>
+                  </el-form-item>
+                  <el-form-item label="数量">
+                    <el-input-number 
+                      v-model="newOrder.orderQty" 
+                      :min="1000" 
+                      :step="1000"
+                      controls-position="right"
+                    ></el-input-number>
+                  </el-form-item>
+                  <el-form-item label="价格" v-if="newOrder.ordType === '2'">
+                    <el-input-number 
+                      v-model="newOrder.price" 
+                      :precision="5" 
+                      :step="0.0001"
+                      controls-position="right"
+                    ></el-input-number>
+                  </el-form-item>
+                </el-form>
+                
+                <div class="action-buttons">
+                  <el-button 
+                    type="primary" 
+                    @click="sendNewOrder" 
+                    :disabled="!connected"
+                    icon="el-icon-shopping-cart-full"
+                  >发送新订单</el-button>
+                </div>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+        </div>
+        
+        <div class="display-panel">
+          <div class="market-data-container">
+            <div class="panel-title">
+              <i class="el-icon-data-line"></i> 市场数据
+            </div>
+            <div class="market-grid">
+              <div class="market-card" v-for="(data, symbol) in marketData" :key="symbol">
+                <div class="symbol-name">{{ symbol }}</div>
+                <div class="price-change" :class="data.change > 0 ? 'price-up' : 'price-down'">
+                  {{ data.change > 0 ? '↑' : '↓' }} {{ Math.abs(data.change).toFixed(5) }}
+                </div>
+                <div class="price-row">
+                  <span>买价:</span>
+                  <span class="bid-price">{{ data.bid.toFixed(5) }}</span>
+                </div>
+                <div class="price-row">
+                  <span>卖价:</span>
+                  <span class="ask-price">{{ data.ask.toFixed(5) }}</span>
+                </div>
+                <div class="price-row">
+                  <span>当日最高:</span>
+                  <span>{{ data.high.toFixed(5) }}</span>
+                </div>
+                <div class="price-row">
+                  <span>当日最低:</span>
+                  <span>{{ data.low.toFixed(5) }}</span>
+                </div>
+                <div class="chart-container">
+                  <div class="chart-placeholder">
+                    <div class="chart-line"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="orders-container">
+            <div class="panel-title">
+              <i class="el-icon-s-order"></i> 订单状态
+            </div>
+            <div class="orders-table">
+              <div class="order-row order-header">
+                <div>订单ID</div>
+                <div>交易品种</div>
+                <div>方向</div>
+                <div>数量</div>
+                <div>状态</div>
+              </div>
+              <div 
+                class="order-row" 
+                v-for="order in orders" 
+                :key="order.clOrdId"
+                :class="{
+                  'new-order': order.status === '新订单',
+                  'filled-order': order.status === '完全成交',
+                  'rejected-order': order.status === '已拒绝'
+                }"
+              >
+                <div>{{ order.clOrdId }}</div>
+                <div>{{ order.symbol }}</div>
+                <div :class="order.side === '1' ? 'buy-order' : 'sell-order'">
+                  {{ order.side === '1' ? '买入' : '卖出' }}
+                </div>
+                <div>{{ order.orderQty.toLocaleString() }}</div>
+                <div>
+                  <span class="order-status-badge" :class="getStatusClass(order.status)">
+                    {{ order.status }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="logs-container">
+            <div class="log-entry" v-for="(log, index) in logs" :key="index">
+              <span class="log-timestamp">[{{ log.timestamp }}]</span>
+              <span class="log-message" :class="logClass(log.type)">{{ log.message }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          connected: false,
+          activeTab: 'connection',
+          config: {
+            host: 'localhost',
+            port: 5001,
+            senderCompId: 'CLIENT',
+            targetCompId: 'SERVER',
+            username: '',
+            password: ''
+          },
+          marketDataRequest: {
+            symbol: 'EUR/USD',
+            subscriptionType: 1
+          },
+          newOrder: {
+            clOrdId: '',
+            symbol: 'EUR/USD',
+            side: '1',
+            ordType: '1',
+            orderQty: 10000,
+            price: 1.12000
+          },
+          marketData: {},
+          orders: [],
+          logs: [],
+          ws: null
+        };
+      },
+      created() {
+        this.initializeMarketData();
+        this.generateOrderId();
+      },
+      methods: {
+        initializeMarketData() {
+          // 初始化市场数据
+          this.marketData = {
+            'EUR/USD': { bid: 1.0850, ask: 1.0852, high: 1.0855, low: 1.0848, change: 0.0001 },
+            'GBP/USD': { bid: 1.2700, ask: 1.2702, high: 1.2705, low: 1.2695, change: -0.0002 },
+            'USD/JPY': { bid: 147.50, ask: 147.52, high: 147.55, low: 147.45, change: 0.05 },
+            'XAU/USD': { bid: 2020.00, ask: 2020.50, high: 2021.00, low: 2019.50, change: 1.20 }
+          };
+        },
+        
+        generateId(prefix) {
+          return prefix + '_' + Math.random().toString(36).substr(2, 8).toUpperCase();
+        },
+        
+        generateOrderId() {
+          this.newOrder.clOrdId = this.generateId('ORD');
+        },
+        
+        connect() {
+          this.addLog('系统', '正在建立WebSocket连接...');
+          
+          try {
+            // 在实际应用中，这里连接到后端的WebSocket服务
+            // this.ws = new WebSocket('ws://localhost:8080/fix-gateway');
+            
+            // 模拟连接
+            setTimeout(() => {
+              this.connected = true;
+              this.addLog('系统', 'WebSocket连接已建立');
+              this.addLog('系统', '发送FIX会话配置');
+              
+              // 模拟初始化市场数据
+              this.addLog('行情', '收到市场数据快照: EUR/USD');
+              this.addLog('行情', '收到市场数据快照: GBP/USD');
+              this.addLog('行情', '收到市场数据快照: USD/JPY');
+              this.addLog('行情', '收到市场数据快照: XAU/USD');
+            }, 800);
+          } catch (error) {
+            this.addLog('错误', '连接失败: ' + error.message);
+          }
+        },
+        
+        disconnect() {
+          if (this.ws) {
+            // 实际应用中关闭WebSocket
+            // this.ws.close();
+          }
+          
+          this.connected = false;
+          this.addLog('系统', 'WebSocket连接已关闭');
+        },
+        
+        sendLogon() {
+          this.addLog('会话', '发送登录请求');
+          this.addLog('FIX', '发送管理消息: 8=FIX.4.4|9=105|35=A|49=CLIENT|56=SERVER|34=1|52=20240610-10:00:00.000|98=0|108=30|10=120|');
+          
+          // 模拟登录响应
+          setTimeout(() => {
+            this.addLog('FIX', '接收管理消息: 8=FIX.4.4|9=95|35=A|49=SERVER|56=CLIENT|34=1|52=20240610-10:00:00.100|98=0|108=30|10=110|');
+            this.addLog('会话', '登录成功');
+            this.addLog('FIX', '心跳间隔: 30秒');
+          }, 500);
+        },
+        
+        sendLogout() {
+          this.addLog('会话', '发送登出请求');
+          this.addLog('FIX', '发送管理消息: 8=FIX.4.4|9=80|35=5|49=CLIENT|56=SERVER|34=4|52=20240610-10:20:00.000|58=Normal logout|10=120|');
+          
+          // 模拟登出响应
+          setTimeout(() => {
+            this.addLog('FIX', '接收管理消息: 8=FIX.4.4|9=75|35=5|49=SERVER|56=CLIENT|34=4|52=20240610-10:20:00.100|58=Goodbye|10=110|');
+            this.addLog('会话', '登出成功');
+          }, 500);
+        },
+        
+        sendHeartbeat() {
+          this.addLog('会话', '发送心跳');
+          this.addLog('FIX', '发送管理消息: 8=FIX.4.4|9=60|35=0|49=CLIENT|56=SERVER|34=5|52=20240610-10:25:00.000|10=100|');
+          
+          // 模拟心跳响应
+          setTimeout(() => {
+            this.addLog('FIX', '接收管理消息: 8=FIX.4.4|9=60|35=0|49=SERVER|56=CLIENT|34=5|52=20240610-10:25:00.050|10=100|');
+          }, 300);
+        },
+        
+        sendNewOrder() {
+          const sideText = this.newOrder.side === '1' ? '买入' : '卖出';
+          const typeText = this.newOrder.ordType === '1' ? '市价' : '限价';
+          const priceText = this.newOrder.ordType === '1' ? '' : `@ ${this.newOrder.price}`;
+          
+          this.addLog('订单', 
+            `发送新订单: ${this.newOrder.clOrdId} ${this.newOrder.symbol} ${sideText} ${typeText} ${this.newOrder.orderQty} ${priceText}`
+          );
+          
+          this.addLog('FIX', `发送应用消息: 8=FIX.4.4|9=150|35=D|49=CLIENT|56=SERVER|34=2|52=${this.getCurrentTime()}|11=${this.newOrder.clOrdId}|55=${this.newOrder.symbol}|54=${this.newOrder.side}|40=${this.newOrder.ordType}|38=${this.newOrder.orderQty}|59=1|10=150|`);
+          
+          // 添加到订单列表
+          this.orders.unshift({
+            clOrdId: this.newOrder.clOrdId,
+            symbol: this.newOrder.symbol,
+            side: this.newOrder.side,
+            orderQty: this.newOrder.orderQty,
+            status: '新订单'
+          });
+          
+          // 模拟订单响应
+          setTimeout(() => {
+            this.addLog('FIX', `接收应用消息: 8=FIX.4.4|9=200|35=8|49=SERVER|56=CLIENT|34=2|52=${this.getCurrentTime()}|37=EX${Math.floor(Math.random()*1000000)}|11=${this.newOrder.clOrdId}|17=TRD${Math.floor(Math.random()*1000)}|150=0|39=0|55=${this.newOrder.symbol}|54=${this.newOrder.side}|38=${this.newOrder.orderQty}|40=${this.newOrder.ordType}|59=1|10=180|`);
+            this.addLog('订单', `订单 ${this.newOrder.clOrdId} 状态更新: 新订单`);
+            
+            // 模拟订单执行
+            setTimeout(() => {
+              const statuses = ['部分成交', '完全成交', '已拒绝'];
+              const status = statuses[Math.floor(Math.random() * statuses.length)];
+              const filledQty = status === '完全成交' ? this.newOrder.orderQty : Math.floor(this.newOrder.orderQty * 0.7);
+              
+              this.addLog('FIX', `接收应用消息: 8=FIX.4.4|9=220|35=8|49=SERVER|56=CLIENT|34=3|52=${this.getCurrentTime()}|37=EX${Math.floor(Math.random()*1000000)}|11=${this.newOrder.clOrdId}|17=TRD${Math.floor(Math.random()*1000)}|150=0|39=${status === '已拒绝' ? '8' : '2'}|55=${this.newOrder.symbol}|54=${this.newOrder.side}|38=${this.newOrder.orderQty}|14=${filledQty}|40=${this.newOrder.ordType}|59=1|10=190|`);
+              this.addLog('订单', `订单 ${this.newOrder.clOrdId} 状态更新: ${status}`);
+              
+              // 更新订单状态
+              const orderIndex = this.orders.findIndex(o => o.clOrdId === this.newOrder.clOrdId);
+              if (orderIndex !== -1) {
+                this.$set(this.orders[orderIndex], 'status', status);
+              }
+            }, 1000);
+          }, 500);
+          
+          // 生成新订单ID
+          this.generateOrderId();
+        },
+        
+        sendMarketDataRequest() {
+          this.addLog('行情', 
+            `发送行情请求: ${this.marketDataRequest.symbol} (${this.marketDataRequest.subscriptionType === 1 ? '快照+更新' : '仅快照'})`
+          );
+          
+          this.addLog('FIX', `发送应用消息: 8=FIX.4.4|9=180|35=V|49=CLIENT|56=SERVER|34=3|52=${this.getCurrentTime()}|262=MD${Math.floor(Math.random()*10000)}|263=${this.marketDataRequest.subscriptionType}|264=1|267=2|269=0|269=1|55=${this.marketDataRequest.symbol}|10=170|`);
+          
+          // 模拟市场数据响应
+          setTimeout(() => {
+            const symbol = this.marketDataRequest.symbol;
+            const data = this.marketData[symbol];
+            
+            this.addLog('FIX', `接收应用消息: 8=FIX.4.4|9=220|35=W|49=SERVER|56=CLIENT|34=3|52=${this.getCurrentTime()}|262=MD${Math.floor(Math.random()*10000)}|55=${symbol}|268=2|269=0|270=${data.bid}|271=1000000|269=1|270=${data.ask}|271=1000000|10=190|');
+            this.addLog('行情', `收到行情快照: ${symbol} 买价: ${data.bid.toFixed(5)} 卖价: ${data.ask.toFixed(5)}`);
+            
+            if (this.marketDataRequest.subscriptionType === 1) {
+              this.addLog('行情', `开始接收 ${symbol} 的实时行情更新`);
+              
+              // 模拟实时行情更新
+              let updateCount = 0;
+              const updateInterval = setInterval(() => {
+                if (updateCount < 5) {
+                  const change = (Math.random() - 0.5) * 0.0005;
+                  this.marketData[symbol].bid += change;
+                  this.marketData[symbol].ask += change;
+                  this.marketData[symbol].change = change;
+                  
+                  this.addLog('行情', `行情更新: ${symbol} 买价: ${this.marketData[symbol].bid.toFixed(5)} 卖价: ${this.marketData[symbol].ask.toFixed(5)}`);
+                  updateCount++;
+                } else {
+                  clearInterval(updateInterval);
+                }
+              }, 1500);
+            }
+          }, 500);
+        },
+        
+        addLog(type, message) {
+          const now = new Date();
+          const timestamp = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+          
+          this.logs.push({
+            timestamp,
+            type,
+            message
+          });
+          
+          this.scrollLogsToBottom();
+        },
+        
+        scrollLogsToBottom() {
+          this.$nextTick(() => {
+            const logsContainer = document.querySelector('.logs-container');
+            if (logsContainer) {
+              logsContainer.scrollTop = logsContainer.scrollHeight;
+            }
+          });
+        },
+        
+        logClass(type) {
+          return {
+            'log-error': type === '错误',
+            'log-warning': type === '警告',
+            'log-fix': type === 'FIX',
+            'log-order': type === '订单',
+            'log-quote': type === '行情',
+            'log-session': type === '会话',
+            'log-system': type === '系统'
+          };
+        },
+        
+        getCurrentTime() {
+          const now = new Date();
+          return `${now.getFullYear()}${String(now.getMonth()+1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-` +
+                 `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+        },
+        
+        getStatusClass(status) {
+          switch(status) {
+            case '新订单': return 'status-new';
+            case '部分成交': return 'status-partial';
+            case '完全成交': return 'status-filled';
+            case '已拒绝': return 'status-rejected';
+            default: return '';
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
