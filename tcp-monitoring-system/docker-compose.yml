@@ -1,0 +1,16 @@
+version: '3'
+
+services:
+  tcp-monitor:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+    restart: always
+    privileged: true  # Required for accessing network stats
+    networks:
+      - monitoring
+
+networks:
+  monitoring:  

@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TCP Connection Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#3B82F6',
+            secondary: '#10B981',
+            accent: '#8B5CF6',
+            warning: '#F59E0B',
+            danger: '#EF4444',
+            dark: '#1F2937',
+            light: '#F9FAFB'
+          },
+          fontFamily: {
+            inter: ['Inter', 'sans-serif'],
+          },
+        },
+      }
+    }
+  </script>
+  
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .content-auto {
+        content-visibility: auto;
+      }
+      .card-shadow {
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      }
+      .connection-state {
+        transition: all 0.3s ease;
+      }
+      .connection-state:hover {
+        transform: translateY(-2px);
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-50 font-inter text-gray-800">
+  <div class="min-h-screen flex flex-col">
+    <!-- Header -->
+    <header class="bg-white shadow-sm sticky top-0 z-50">
+      <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+        <div class="flex items-center space-x-3">
+          <i class="fa fa-server text-primary text-2xl"></i>
+          <h1 class="text-xl font-bold text-dark">TCP Connection Monitor</h1>
+        </div>
+        <div class="flex items-center space-x-4">
+          <div id="update-time" class="text-sm text-gray-500">Last updated: --</div>
+          <button id="refresh-btn" class="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg transition duration-300 flex items-center">
+            <i class="fa fa-refresh mr-2"></i> Refresh
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-grow container mx-auto px-4 py-8">
+      <!-- Overview Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div class="bg-white rounded-xl p-6 card-shadow connection-state">
+          <div class="flex justify-between items-start mb-4">
+            <div>
+              <p class="text-sm font-medium text-gray-500">Total Connections</p>
+              <h3 class="text-3xl font-bold" id="total-connections">0</h3>
+            </div>
+            <div class="bg-blue-100 p-3 rounded-lg">
+              <i class="fa fa-link text-primary text-xl"></i>
+            </div>
+          </div>
+          <div class="w-full bg-gray-200 rounded-full h-2">
+            <div id="connection-progress" class="bg-primary h-2 rounded-full" style="width: 0%"></div>
+          </div>
+        </div>
+        
+        <div class="bg-white rounded-xl p-6 card-shadow connection-state">
+          <div class="flex justify-between items-start mb-4">
+            <div>
+              <p class="text-sm font-medium text-gray-500">Established</p>
+              <h3 class="text-3xl font-bold" id="established-count">0</h3>
+            </div>
+            <div class="bg-green-100 p-3 rounded-lg">
+              <i class="fa fa-check-circle text-secondary text-xl"></i>
+            </div>
+          </div>
+          <div class="text-sm text-secondary font-medium flex items-center mt-2">
+            <i class="fa fa-arrow-up mr-1"></i> 
+            <span id="established-percentage">0%</span> of total
+          </div>
+        </div>
+        
+        <div class="bg-white rounded-xl p-6 card-shadow connection-state">
+          <div class="flex justify-between items-start mb-4">
+            <div>
+              <p class="text-sm font-medium text-gray-500">Average RTT</p>
+              <h3 class="text-3xl font-bold" id="avg-rtt">0 ms</h3>
+            </div>
+            <div class="bg-purple-100 p-3 rounded-lg">
+              <i class="fa fa-clock-o text-accent text-xl"></i>
+            </div>
+          </div>
+          <div class="text-sm text-gray-500 flex items-center mt-2">
+            <i class="fa fa-tachometer mr-1"></i> 
+            <span id="rtt-status">Normal</span>
+          </div>
+        </div>
+        
+        <div class="bg-white rounded-xl p-6 card-shadow connection-state">
+          <div class="flex justify-between items-start mb-4">
+            <div>
+              <p class="text-sm font-medium text-gray-500">Top Application</p>
+              <h3 class="text-3xl font-bold" id="top-app">--</h3>
+            </div>
+            <div class="bg-orange-100 p-3 rounded-lg">
+              <i class="fa fa-cubes text-warning text-xl"></i>
+            </div>
+          </div>
+          <div class="text-sm text-gray-500 flex items-center mt-2">
+            <i class="fa fa-connectdevelop mr-1"></i> 
+            <span id="top-app-connections">0 connections</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Charts Section -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div class="bg-white rounded-xl p-6 card-shadow">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-lg font-semibold">Connection States</h2>
+            <div class="text-sm text-gray-500">
+              <span id="states-update-time">Last updated: --</span>
+            </div>
+          </div>
+          <div class="h-80">
+            <canvas id="connection-states-chart"></canvas>
+          </div>
+        </div>
+        
+        <div class="bg-white rounded-xl p-6 card-shadow">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-lg font-semibold">Top Applications</h2>
+            <div class="text-sm text-gray-500">
+              <span id="apps-update-time">Last updated: --</span>
+            </div>
+          </div>
+          <div class="h-80">
+            <canvas id="top-applications-chart"></canvas>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Connection Table -->
+      <div class="bg-white rounded-xl p-6 card-shadow">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-lg font-semibold">Connection Details</h2>
+          <div class="flex items-center space-x-4">
+            <div class="relative">
+              <input type="text" id="connection-filter" placeholder="Filter connections..." class="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50">
+              <i class="fa fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+            </div>
+            <div class="text-sm text-gray-500">
+              <span id="details-update-time">Last updated: --</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+              <tr>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Local Address</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Remote Address</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">State</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Application</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PID</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+              </tr>
+            </thead>
+            <tbody id="connection-table-body" class="bg-white divide-y divide-gray-200">
+              <!-- Table rows will be inserted here -->
+              <tr>
+                <td colspan="6" class="px-6 py-10 text-center text-gray-500">
+                  <i class="fa fa-spinner fa-spin mr-2"></i> Loading connection data...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        
+        <div class="mt-4 flex justify-between items-center">
+          <div class="text-sm text-gray-500">
+            Showing <span id="showing-count">0</span> connections
+          </div>
+          <div class="flex space-x-2">
+            <button class="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50">
+              Previous
+            </button>
+            <button class="px-4 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary/90">
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-gray-200 py-6">
+      <div class="container mx-auto px-4">
+        <div class="flex flex-col md:flex-row justify-between items-center">
+          <div class="mb-4 md:mb-0">
+            <p class="text-sm text-gray-500">TCP Connection Monitor &copy; 2025</p>
+          </div>
+          <div class="flex space-x-6">
+            <a href="#" class="text-gray-500 hover:text-primary transition-colors">
+              <i class="fa fa-github text-xl"></i>
+            </a>
+            <a href="#" class="text-gray-500 hover:text-primary transition-colors">
+              <i class="fa fa-twitter text-xl"></i>
+            </a>
+            <a href="#" class="text-gray-500 hover:text-primary transition-colors">
+              <i class="fa fa-linkedin text-xl"></i>
+            </a>
+          </div>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    // Configuration
+    const API_URL = 'http://localhost:3000/stats';
+    const REFRESH_INTERVAL = 10000; // 10 seconds
+    
+    // Global variables
+    let connectionStatesChart, topApplicationsChart;
+    let connectionData = [];
+    
+    // DOM Elements
+    const refreshBtn = document.getElementById('refresh-btn');
+    const updateTimeEl = document.getElementById('update-time');
+    const totalConnectionsEl = document.getElementById('total-connections');
+    const connectionProgressEl = document.getElementById('connection-progress');
+    const establishedCountEl = document.getElementById('established-count');
+    const establishedPercentageEl = document.getElementById('established-percentage');
+    const avgRttEl = document.getElementById('avg-rtt');
+    const rttStatusEl = document.getElementById('rtt-status');
+    const topAppEl = document.getElementById('top-app');
+    const topAppConnectionsEl = document.getElementById('top-app-connections');
+    const statesUpdateTimeEl = document.getElementById('states-update-time');
+    const appsUpdateTimeEl = document.getElementById('apps-update-time');
+    const detailsUpdateTimeEl = document.getElementById('details-update-time');
+    const connectionTableBodyEl = document.getElementById('connection-table-body');
+    const showingCountEl = document.getElementById('showing-count');
+    const connectionFilterEl = document.getElementById('connection-filter');
+    
+    // Initialize charts
+    function initCharts() {
+      // Connection States Chart
+      const statesCtx = document.getElementById('connection-states-chart').getContext('2d');
+      connectionStatesChart = new Chart(statesCtx, {
+        type: 'doughnut',
+        data: {
+          labels: [],
+          datasets: [{
+            data: [],
+            backgroundColor: [
+              '#3B82F6', // primary
+              '#10B981', // secondary
+              '#8B5CF6', // accent
+              '#F59E0B', // warning
+              '#EF4444', // danger
+              '#6B7280', // gray
+              '#EC4899', // pink
+              '#06B6D4', // cyan
+            ],
+            borderWidth: 0,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'right',
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const label = context.label || '';
+                  const value = context.raw || 0;
+                  const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                  const percentage = Math.round((value / total) * 100);
+                  return `${label}: ${value} (${percentage}%)`;
+                }
+              }
+            }
+          },
+          animation: {
+            animateScale: true,
+            animateRotate: true
+          }
+        }
+      });
+      
+      // Top Applications Chart
+      const appsCtx = document.getElementById('top-applications-chart').getContext('2d');
+      topApplicationsChart = new Chart(appsCtx, {
+        type: 'bar',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Connections',
+            data: [],
+            backgroundColor: '#3B82F6',
+            borderWidth: 0,
+            borderRadius: 4,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          plugins: {
+            legend: {
+              display: false
+            }
+          },
+          scales: {
+            x: {
+              beginAtZero: true,
+              grid: {
+                display: true,
+                color: 'rgba(0, 0, 0, 0.05)'
+              }
+            },
+            y: {
+              grid: {
+                display: false
+              }
+            }
+          }
+        }
+      });
+    }
+    
+    // Format date to human-readable string
+    function formatDate(timestamp) {
+      const date = new Date(timestamp);
+      return date.toLocaleTimeString();
+    }
+    
+    // Update UI with stats data
+    function updateUI(stats) {
+      const now = new Date();
+      const formattedTime = now.toLocaleTimeString();
+      
+      // Update header time
+      updateTimeEl.textContent = `Last updated: ${formattedTime}`;
+      
+      // Update overview cards
+      totalConnectionsEl.textContent = stats.totalConnections;
+      connectionProgressEl.style.width = `${Math.min(stats.totalConnections / 1000 * 100, 100)}%`;
+      
+      const establishedCount = stats.connectionStates.ESTABLISHED || 0;
+      establishedCountEl.textContent = establishedCount;
+      establishedPercentageEl.textContent = `${Math.round((establishedCount / stats.totalConnections) * 100)}%`;
+      
+      avgRttEl.textContent = `${stats.rttStats.avg.toFixed(1)} ms`;
+      
+      // Set RTT status based on average
+      if (stats.rttStats.avg < 50) {
+        rttStatusEl.textContent = 'Excellent';
+        rttStatusEl.className = 'text-green-500 font-medium';
+      } else if (stats.rttStats.avg < 150) {
+        rttStatusEl.textContent = 'Normal';
+        rttStatusEl.className = 'text-blue-500 font-medium';
+      } else if (stats.rttStats.avg < 300) {
+        rttStatusEl.textContent = 'Slow';
+        rttStatusEl.className = 'text-orange-500 font-medium';
+      } else {
+        rttStatusEl.textContent = 'Poor';
+        rttStatusEl.className = 'text-red-500 font-medium';
+      }
+      
+      if (stats.topApplications.length > 0) {
+        topAppEl.textContent = stats.topApplications[0].name;
+        topAppConnectionsEl.textContent = `${stats.topApplications[0].count} connections`;
+      }
+      
+      // Update charts
+      updateConnectionStatesChart(stats.connectionStates);
+      updateTopApplicationsChart(stats.topApplications);
+      
+      // Update connection table
+      updateConnectionTable(stats);
+    }
+    
+    // Update connection states chart
+    function updateConnectionStatesChart(states) {
+      const labels = Object.keys(states);
+      const data = Object.values(states);
+      
+      connectionStatesChart.data.labels = labels;
+      connectionStatesChart.data.datasets[0].data = data;
+      connectionStatesChart.update();
+      
+      statesUpdateTimeEl.textContent = `Last updated: ${formatDate(Date.now())}`;
+    }
+    
+    // Update top applications chart
+    function updateTopApplicationsChart(applications) {
+      const labels = applications.map(app => app.name);
+      const data = applications.map(app => app.count);
+      
+      topApplicationsChart.data.labels = labels;
+      topApplicationsChart.data.datasets[0].data = data;
+      topApplicationsChart.update();
+      
+      appsUpdateTimeEl.textContent = `Last updated: ${formatDate(Date.now())}`;
+    }
+    
+    // Update connection table
+    function updateConnectionTable(stats) {
+      // Simulate connection details data (since we don't have real data from the API)
+      connectionData = [
+        { local: '192.168.1.100:8080', remote: '104.28.32.166:443', state: 'ESTABLISHED', app: 'nginx', pid: '1234', duration: '2h 15m' },
+        { local: '192.168.1.100:54321', remote: '208.67.222:53', state: 'ESTABLISHED', app: 'systemd-resolve', pid: '5678', duration: '15m 30s' },
+        { local: '192.168.1.100:443', remote: '172.217.16.206:51342', state: 'ESTABLISHED', app: 'node', pid: '9012', duration: '45m 12s' },
+        { local: '192.168.1.100:80', remote: '64.233.164.204:56789', state: 'TIME_WAIT', app: 'nginx', pid: '1234', duration: '0m 23s' },
+        { local: '192.168.1.100:22', remote: '103.21.244.0:50000', state: 'ESTABLISHED', app: 'sshd', pid: '3456', duration: '1d 3h' },
+        { local: '192.168.1.100:5432', remote: '192.168.1.101:50001', state: 'ESTABLISHED', app: 'postgres', pid: '7890', duration: '5h 45m' },
+        { local: '192.168.1.100:6379', remote: '192.168.1.102:49153', state: 'ESTABLISHED', app: 'redis-server', pid: '2345', duration: '3h 20m' },
+        { local: '192.168.1.100:5672', remote: '192.168.1.103:49154', state: 'ESTABLISHED', app: 'rabbitmq-server', pid: '6789', duration: '1h 15m' },
+        { local: '192.168.1.100:9092', remote: '192.168.1.104:49155', state: 'ESTABLISHED', app: 'kafka', pid: '4567', duration: '2h 30m' },
+        { local: '192.168.1.100:8080', remote: '192.168.1.105:50002', state: 'CLOSE_WAIT', app: 'nginx', pid: '1234', duration: '0m 45s' },
+      ];
+      
+      // Apply filter
+      const filterValue = connectionFilterEl.value.toLowerCase();
+      const filteredData = connectionData.filter(item => 
+        item.local.toLowerCase().includes(filterValue) ||
+        item.remote.toLowerCase().includes(filterValue) ||
+        item.state.toLowerCase().includes(filterValue) ||
+        item.app.toLowerCase().includes(filterValue)
+      );
+      
+      // Clear existing rows
+      connectionTableBodyEl.innerHTML = '';
+      
+      // Add new rows
+      if (filteredData.length === 0) {
+        connectionTableBodyEl.innerHTML = `
+          <tr>
+            <td colspan="6" class="px-6 py-10 text-center text-gray-500">
+              <i class="fa fa-search mr-2"></i> No connections found matching your filter
+            </td>
+          </tr>
+        `;
+      } else {
+        filteredData.forEach(item => {
+          let stateClass = 'text-gray-500';
+          if (item.state === 'ESTABLISHED') stateClass = 'text-green-500';
+          else if (item.state === 'TIME_WAIT') stateClass = 'text-blue-500';
+          else if (item.state === 'CLOSE_WAIT') stateClass = 'text-yellow-500';
+          else if (item.state === 'SYN_SENT') stateClass = 'text-purple-500';
+          else if (item.state === 'FIN_WAIT1') stateClass = 'text-orange-500';
+          
+          const row = document.createElement('tr');
+          row.className = 'hover:bg-gray-50 transition-colors';
+          row.innerHTML = `
+            <td class="px-6 py-4 whitespace-nowrap">
+              <div class="text-sm font-medium text-gray-900">${item.local}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+              <div class="text-sm text-gray-900">${item.remote}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+              <div class="text-sm ${stateClass}">${item.state}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+              <div class="text-sm text-gray-900">${item.app}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+              <div class="text-sm text-gray-900">${item.pid}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+              <div class="text-sm text-gray-900">${item.duration}</div>
+            </td>
+          `;
+          connectionTableBodyEl.appendChild(row);
+        });
+      }
+      
+      showingCountEl.textContent = filteredData.length;
+      detailsUpdateTimeEl.textContent = `Last updated: ${formatDate(Date.now())}`;
+    }
+    
+    // Fetch stats from API
+    async function fetchStats() {
+      try {
+        const response = await fetch(API_URL);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const stats = await response.json();
+        updateUI(stats);
+      } catch (error) {
+        console.error('Failed to fetch stats:', error);
+        // Show error message
+        updateTimeEl.textContent = 'Last updated: Error fetching data';
+      }
+    }
+    
+    // Initialize app
+    async function init() {
+      initCharts();
+      await fetchStats();
+      
+      // Set up refresh interval
+      setInterval(fetchStats, REFRESH_INTERVAL);
+      
+      // Set up refresh button
+      refreshBtn.addEventListener('click', async () => {
+        refreshBtn.disabled = true;
+        refreshBtn.innerHTML = '<i class="fa fa-spinner fa-spin mr-2"></i> Refreshing...';
+        
+        await fetchStats();
+        
+        refreshBtn.disabled = false;
+        refreshBtn.innerHTML = '<i class="fa fa-refresh mr-2"></i> Refresh';
+      });
+      
+      // Set up filter
+      connectionFilterEl.addEventListener('input', () => {
+        updateConnectionTable({ connectionStates: {} }); // Pass empty object to use existing connectionData
+      });
+    }
+    
+    // Start the app
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>  
