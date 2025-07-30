@@ -1,0 +1,20 @@
+{
+    "nginx_proxy": {
+        "service_name": "nginx",  // 指定服务名进行自动检测
+        "port": 80,
+        "target_host": "192.168.1.100",
+        "target_port": 8080
+    },
+    "http_proxy": {
+        "host": "127.0.0.1",  // 也可以继续使用手动指定的IP
+        "port": 8081,
+        "target_host": "192.168.1.101",
+        "target_port": 80
+    },
+    "windows_iis_proxy": {
+        "service_name": "W3SVC",  // Windows IIS服务名
+        "port": 80,
+        "target_host": "192.168.1.102",
+        "target_port": 8080
+    }
+}    
