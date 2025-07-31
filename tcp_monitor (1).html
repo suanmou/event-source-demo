@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TCP连接监控系统</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.7.14/dist/vue.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui@2.15.13/lib/theme-chalk/index.css">
+  <script src="https://unpkg.com/element-ui@2.15.13/lib/index.js"></script>
+  
+  <!-- Tailwind配置 -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#1890ff',
+            secondary: '#64748b',
+            success: '#52c41a',
+            warning: '#faad14',
+            danger: '#ff4d4f',
+            info: '#13c2c2',
+            dark: '#1e293b',
+            light: '#f8fafc'
+          },
+          fontFamily: {
+            inter: ['Inter', 'system-ui', 'sans-serif'],
+          },
+        },
+      }
+    }
+  </script>
+  
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .content-auto {
+        content-visibility: auto;
+      }
+      .connection-path {
+        stroke-dasharray: 1000;
+        stroke-dashoffset: 1000;
+        animation: dash 3s linear forwards;
+      }
+      .node-pulse {
+        animation: pulse 2s infinite;
+      }
+      .table-hover-effect {
+        transition: all 0.2s ease-in-out;
+      }
+      .table-hover-effect:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      }
+    }
+    
+    @keyframes dash {
+      to {
+        stroke-dashoffset: 0;
+      }
+    }
+    
+    @keyframes pulse {
+      0% {
+        r: 6;
+        opacity: 1;
+      }
+      50% {
+        r: 8;
+        opacity: 0.6;
+      }
+      100% {
+        r: 6;
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-50 font-inter">
+  <div id="app" class="min-h-screen flex flex-col">
+    <!-- 顶部导航栏 -->
+    <header class="bg-white shadow-sm sticky top-0 z-10">
+      <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+        <div class="flex items-center space-x-2">
+          <i class="fa fa-server text-primary text-2xl"></i>
+          <h1 class="text-xl font-bold text-gray-800">TCP连接监控系统</h1>
+        </div>
+        <div class="flex items-center space-x-4">
+          <el-dropdown trigger="click">
+            <span class="text-gray-600 cursor-pointer flex items-center">
+              <i class="fa fa-refresh mr-1"></i>
+              <span>刷新频率</span>
+              <i class="el-icon-arrow-down el-icon--right ml-1"></i>
+            </span>
+            <el-dropdown-menu slot="dropdown">
+              <el-dropdown-item>5秒</el-dropdown-item>
+              <el-dropdown-item>10秒</el-dropdown-item>
+              <el-dropdown-item>30秒</el-dropdown-item>
+              <el-dropdown-item>1分钟</el-dropdown-item>
+            </el-dropdown-menu>
+          </el-dropdown>
+          <el-button type="primary" size="small" icon="el-icon-plus">
+            添加监控
+          </el-button>
+          <div class="text-sm text-gray-500">
+            <span class="font-medium">总连接数:</span> {{ totalConnections }}
+          </div>
+        </div>
+      </div>
+    </header>
+    
+    <!-- 主要内容区域 -->
+    <main class="flex-grow container mx-auto px-4 py-6">
+      <!-- 搜索和筛选 -->
+      <div class="bg-white rounded-lg shadow-sm p-4 mb-6">
+        <div class="flex flex-wrap gap-4 items-center">
+          <div class="flex-grow">
+            <el-input 
+              v-model="searchQuery" 
+              placeholder="搜索IP地址或端口" 
+              prefix-icon="el-icon-search"
+              clearable
+              @clear="handleSearchClear"
+              @keyup.enter.native="handleSearch">
+            </el-input>
+          </div>
+          <div class="flex items-center space-x-2">
+            <el-select v-model="statusFilter" placeholder="连接状态" size="small">
+              <el-option label="全部" value=""></el-option>
+              <el-option label="已连接" value="connected"></el-option>
+              <el-option label="已断开" value="disconnected"></el-option>
+              <el-option label="连接中" value="connecting"></el-option>
+              <el-option label="断开中" value="disconnecting"></el-option>
+            </el-select>
+            <el-button type="primary" size="small" @click="handleSearch">
+              <i class="fa fa-filter mr-1"></i>筛选
+            </el-button>
+            <el-button type="default" size="small" @click="resetFilters">
+              重置
+            </el-button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 连接列表 -->
+      <div class="bg-white rounded-lg shadow-sm overflow-hidden mb-6">
+        <div class="p-4 border-b border-gray-100 flex justify-between items-center">
+          <h2 class="text-lg font-semibold text-gray-800">TCP连接列表</h2>
+          <div class="flex items-center text-sm text-gray-500">
+            <i class="fa fa-clock-o mr-1"></i>
+            <span>数据更新于: {{ lastUpdateTime }}</span>
+          </div>
+        </div>
+        
+        <div class="p-4">
+          <el-table
+            :data="filteredConnections"
+            stripe
+            border
+            fit
+            highlight-current-row
+            @row-click="handleRowClick"
+            class="table-hover-effect">
+            <el-table-column prop="id" label="ID" width="80"></el-table-column>
+            <el-table-column prop="sourceIP" label="源IP" width="160"></el-table-column>
+            <el-table-column prop="sourcePort" label="源端口" width="100"></el-table-column>
+            <el-table-column prop="destinationIP" label="目标IP" width="160"></el-table-column>
+            <el-table-column prop="destinationPort" label="目标端口" width="100"></el-table-column>
+            <el-table-column prop="status" label="状态" width="100">
+              <template slot-scope="scope">
+                <el-tag
+                  :type="getStatusType(scope.row.status)">
+                  {{ getStatusText(scope.row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="duration" label="持续时间" width="120"></el-table-column>
+            <el-table-column prop="bytesSent" label="发送字节" width="120">
+              <template slot-scope="scope">
+                {{ formatBytes(scope.row.bytesSent) }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="bytesReceived" label="接收字节" width="120">
+              <template slot-scope="scope">
+                {{ formatBytes(scope.row.bytesReceived) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="120">
+              <template slot-scope="scope">
+                <el-button
+                  type="text"
+                  size="small"
+                  @click="handleDetailsClick(scope.row, $event)">
+                  详情
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          
+          <!-- 分页控件 -->
+          <div class="mt-4 flex justify-between items-center">
+            <div class="text-sm text-gray-500">
+              共 {{ totalConnections }} 条记录
+            </div>
+            <el-pagination
+              @size-change="handleSizeChange"
+              @current-change="handleCurrentChange"
+              :current-page="currentPage"
+              :page-sizes="[10, 20, 50, 100]"
+              :page-size="pageSize"
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="totalConnections">
+            </el-pagination>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 状态统计卡片 -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <el-card shadow="hover" class="text-center">
+          <div slot="header" class="clearfix">
+            <span>总连接数</span>
+          </div>
+          <div class="text-4xl font-bold text-primary my-2">{{ totalConnections }}</div>
+          <div class="text-sm text-gray-500">
+            <i class="fa fa-arrow-up text-success"></i> 
+            <span class="text-success">12.5%</span> 较昨日
+          </div>
+        </el-card>
+        
+        <el-card shadow="hover" class="text-center">
+          <div slot="header" class="clearfix">
+            <span>活跃连接</span>
+          </div>
+          <div class="text-4xl font-bold text-success my-2">{{ activeConnections }}</div>
+          <div class="text-sm text-gray-500">
+            <i class="fa fa-arrow-up text-success"></i> 
+            <span class="text-success">8.3%</span> 较昨日
+          </div>
+        </el-card>
+        
+        <el-card shadow="hover" class="text-center">
+          <div slot="header" class="clearfix">
+            <span>已断开连接</span>
+          </div>
+          <div class="text-4xl font-bold text-danger my-2">{{ disconnectedConnections }}</div>
+          <div class="text-sm text-gray-500">
+            <i class="fa fa-arrow-down text-success"></i> 
+            <span class="text-success">4.7%</span> 较昨日
+          </div>
+        </el-card>
+        
+        <el-card shadow="hover" class="text-center">
+          <div slot="header" class="clearfix">
+            <span>平均连接时间</span>
+          </div>
+          <div class="text-4xl font-bold text-info my-2">{{ avgConnectionTime }}s</div>
+          <div class="text-sm text-gray-500">
+            <i class="fa fa-arrow-up text-danger"></i> 
+            <span class="text-danger">2.1%</span> 较昨日
+          </div>
+        </el-card>
+      </div>
+    </main>
+    
+    <!-- 页脚 -->
+    <footer class="bg-white border-t border-gray-200 py-4">
+      <div class="container mx-auto px-4 text-center text-sm text-gray-500">
+        <p>© 2025 TCP连接监控系统 - 版本 1.0.0</p>
+      </div>
+    </footer>
+    
+    <!-- 详情对话框 -->
+    <el-dialog
+      :visible.sync="dialogVisible"
+      title="TCP连接详情"
+      width="90%"
+      center
+      @close="closeDialog">
+      <template slot="content">
+        <div class="p-4">
+          <div class="flex flex-wrap gap-6 mb-6">
+            <div class="flex-grow">
+              <h3 class="text-lg font-semibold mb-3">连接信息</h3>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="bg-gray-50 p-3 rounded">
+                  <div class="text-sm text-gray-500">连接ID</div>
+                  <div class="font-medium">{{ selectedConnection.id }}</div>
+                </div>
+                <div class="bg-gray-50 p-3 rounded">
+                  <div class="text-sm text-gray-500">状态</div>
+                  <el-tag :type="getStatusType(selectedConnection.status)">
+                    {{ getStatusText(selectedConnection.status) }}
+                  </el-tag>
+                </div>
+                <div class="bg-gray-50 p-3 rounded">
+                  <div class="text-sm text-gray-500">开始时间</div>
+                  <div class="font-medium">{{ selectedConnection.startTime }}</div>
+                </div>
+                <div class="bg-gray-50 p-3 rounded">
+                  <div class="text-sm text-gray-500">持续时间</div>
+                  <div class="font-medium">{{ selectedConnection.duration }}</div>
+                </div>
+                <div class="bg-gray-50 p-3 rounded">
+                  <div class="text-sm text-gray-500">发送字节</div>
+                  <div class="font-medium">{{ formatBytes(selectedConnection.bytesSent) }}</div>
+                </div>
+                <div class="bg-gray-50 p-3 rounded">
+                  <div class="text-sm text-gray-500">接收字节</div>
+                  <div class="font-medium">{{ formatBytes(selectedConnection.bytesReceived) }}</div>
+                </div>
+                <div class="bg-gray-50 p-3 rounded">
+                  <div class="text-sm text-gray-500">平均延迟</div>
+                  <div class="font-medium">{{ selectedConnection.averageLatency }}ms</div>
+                </div>
+                <div class="bg-gray-50 p-3 rounded">
+                  <div class="text-sm text-gray-500">丢包率</div>
+                  <div class="font-medium">{{ selectedConnection.packetLossRate }}%</div>
+                </div>
+              </div>
+            </div>
+            <div class="w-full md:w-80">
+              <h3 class="text-lg font-semibold mb-3">连接路径</h3>
+              <div class="bg-gray-50 p-3 rounded h-40 flex items-center justify-center">
+                <svg viewBox="0 0 300 150" class="w-full h-full">
+                  <defs>
+                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+                    </marker>
+                  </defs>
+                  <line x1="30" y1="75" x2="70" y2="75" stroke="#64748b" stroke-width="2" marker-end="url(#arrowhead)" class="connection-path"/>
+                  <line x1="70" y1="75" x2="110" y2="75" stroke="#64748b" stroke-width="2" marker-end="url(#arrowhead)" class="connection-path"/>
+                  <line x1="110" y1="75" x2="150" y2="75" stroke="#64748b" stroke-width="2" marker-end="url(#arrowhead)" class="connection-path"/>
+                  <line x1="150" y1="75" x2="190" y2="75" stroke="#64748b" stroke-width="2" marker-end="url(#arrowhead)" class="connection-path"/>
+                  <line x1="190" y1="75" x2="230" y2="75" stroke="#64748b" stroke-width="2" marker-end="url(#arrowhead)" class="connection-path"/>
+                  <line x1="230" y1="75" x2="270" y2="75" stroke="#64748b" stroke-width="2" marker-end="url(#arrowhead)" class="connection-path"/>
+                  
+                  <circle cx="30" cy="75" r="6" fill="#1890ff" class="node-pulse"/>
+                  <circle cx="70" cy="75" r="6" fill="#1890ff"/>
+                  <circle cx="110" cy="75" r="6" fill="#1890ff"/>
+                  <circle cx="150" cy="75" r="6" fill="#1890ff"/>
+                  <circle cx="190" cy="75" r="6" fill="#1890ff"/>
+                  <circle cx="230" cy="75" r="6" fill="#1890ff"/>
+                  <circle cx="270" cy="75" r="6" fill="#52c41a" class="node-pulse"/>
+                  
+                  <text x="30" y="60" text-anchor="middle" font-size="10">{{ selectedConnection.sourceIP }}</text>
+                  <text x="70" y="90" text-anchor="middle" font-size="10">192.168.1.1</text>
+                  <text x="110" y="60" text-anchor="middle" font-size="10">10.0.0.1</text>
+                  <text x="150" y="90" text-anchor="middle" font-size="10">203.0.113.1</text>
+                  <text x="190" y="60" text-anchor="middle" font-size="10">45.32.12.1</text>
+                  <text x="230" y="90" text-anchor="middle" font-size="10">198.51.100.1</text>
+                  <text x="270" y="60" text-anchor="middle" font-size="10">{{ selectedConnection.destinationIP }}</text>
+                  
+                  <text x="50" y="40" text-anchor="middle" font-size="10">5ms</text>
+                  <text x="90" y="40" text-anchor="middle" font-size="10">3ms</text>
+                  <text x="130" y="40" text-anchor="middle" font-size="10">8ms</text>
+                  <text x="170" y="40" text-anchor="middle" font-size="10">12ms</text>
+                  <text x="210" y="40" text-anchor="middle" font-size="10">7ms</text>
+                  <text x="250" y="40" text-anchor="middle" font-size="10">4ms</text>
+                </svg>
+              </div>
+            </div>
+          </div>
+          
+          <h3 class="text-lg font-semibold mb-3">连接路径详情</h3>
+          <el-table
+            :data="selectedConnection.pathNodes"
+            stripe
+            border
+            fit>
+            <el-table-column prop="hop" label="跳数" width="80"></el-table-column>
+            <el-table-column prop="ip" label="IP地址" width="160"></el-table-column>
+            <el-table-column prop="hostname" label="主机名" width="180"></el-table-column>
+            <el-table-column prop="location" label="地理位置" width="150"></el-table-column>
+            <el-table-column prop="responseTime" label="响应时间" width="120">
+              <template slot-scope="scope">
+                <span :class="getTimeClass(scope.row.responseTime)">{{ scope.row.responseTime }}ms</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="status" label="状态" width="100">
+              <template slot-scope="scope">
+                <el-tag
+                  :type="scope.row.status === 'online' ? 'success' : 'danger'">
+                  {{ scope.row.status === 'online' ? '在线' : '离线' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+          
+          <h3 class="text-lg font-semibold mb-3 mt-6">性能指标</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-gray-50 p-4 rounded-lg">
+              <h4 class="text-sm font-medium mb-2">响应时间趋势 (ms)</h4>
+              <div class="h-60">
+                <!-- 这里会显示响应时间图表 -->
+                <div class="flex items-center justify-center h-full">
+                  <div class="text-gray-400">
+                    <i class="fa fa-line-chart text-4xl"></i>
+                    <p class="mt-2">加载响应时间数据...</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="bg-gray-50 p-4 rounded-lg">
+              <h4 class="text-sm font-medium mb-2">流量统计 (KB/s)</h4>
+              <div class="h-60">
+                <!-- 这里会显示流量统计图表 -->
+                <div class="flex items-center justify-center h-full">
+                  <div class="text-gray-400">
+                    <i class="fa fa-area-chart text-4xl"></i>
+                    <p class="mt-2">加载流量数据...</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+      <template slot="footer" class="dialog-footer">
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveConnectionDetails">保存</el-button>
+      </template>
+    </el-dialog>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          dialogVisible: false,
+          searchQuery: '',
+          statusFilter: '',
+          currentPage: 1,
+          pageSize: 10,
+          totalConnections: 0,
+          connections: [],
+          selectedConnection: {},
+          lastUpdateTime: new Date().toLocaleString(),
+          
+          // 模拟数据
+          mockConnections: [
+            {
+              id: 'TCP-20250731-001',
+              sourceIP: '192.168.1.100',
+              sourcePort: 54321,
+              destinationIP: '203.0.113.45',
+              destinationPort: 80,
+              status: 'connected',
+              startTime: '2025-07-31 08:30:15',
+              duration: '2小时15分钟',
+              bytesSent: 12345678,
+              bytesReceived: 87654321,
+              averageLatency: 28,
+              packetLossRate: 0.2,
+              pathNodes: [
+                { hop: 1, ip: '192.168.1.100', hostname: 'local-pc', location: '本地网络', responseTime: 0, status: 'online' },
+                { hop: 2, ip: '192.168.1.1', hostname: 'router-home', location: '本地网络', responseTime: 5, status: 'online' },
+                { hop: 3, ip: '10.0.0.1', hostname: 'gateway-isp', location: 'ISP网络', responseTime: 3, status: 'online' },
+                { hop: 4, ip: '203.0.113.1', hostname: 'core-router-1', location: 'ISP核心', responseTime: 8, status: 'online' },
+                { hop: 5, ip: '45.32.12.1', hostname: 'edge-router', location: '目标网络', responseTime: 12, status: 'online' },
+                { hop: 6, ip: '198.51.100.1', hostname: 'web-server-1', location: '目标网络', responseTime: 7, status: 'online' },
+                { hop: 7, ip: '203.0.113.45', hostname: 'web-server-2', location: '目标网络', responseTime: 4, status: 'online' }
+              ]
+            },
+            {
+              id: 'TCP-20250731-002',
+              sourceIP: '192.168.1.101',
+              sourcePort: 49152,
+              destinationIP: '198.51.100.32',
+              destinationPort: 443,
+              status: 'connected',
+              startTime: '2025-07-31 09:15:42',
+              duration: '1小时45分钟',
+              bytesSent: 56789012,
+              bytesReceived: 98765432,
+              averageLatency: 42,
+              packetLossRate: 0.5,
+              pathNodes: [
+                { hop: 1, ip: '192.168.1.101', hostname: 'work-pc', location: '本地网络', responseTime: 0, status: 'online' },
+                { hop: 2, ip: '192.168.1.1', hostname: 'router-home', location: '本地网络', responseTime: 4, status: 'online' },
+                { hop: 3, ip: '10.0.0.1', hostname: 'gateway-isp', location: 'ISP网络', responseTime: 6, status: 'online' },
+                { hop: 4, ip: '203.0.113.1', hostname: 'core-router-1', location: 'ISP核心', responseTime: 10, status: 'online' },
+                { hop: 5, ip: '45.32.12.1', hostname: 'edge-router', location: '目标网络', responseTime: 15, status: 'online' },
+                { hop: 6, ip: '198.51.100.32', hostname: 'secure-server', location: '目标网络', responseTime: 7, status: 'online' }
+              ]
+            },
+            {
+              id: 'TCP-20250731-003',
+              sourceIP: '192.168.1.102',
+              sourcePort: 50000,
+              destinationIP: '203.0.113.78',
+              destinationPort: 22,
+              status: 'disconnected',
+              startTime: '2025-07-31 10:45:22',
+              duration: '45分钟',
+              bytesSent: 1234567,
+              bytesReceived: 7654321,
+              averageLatency: 55,
+              packetLossRate: 1.2,
+              pathNodes: [
+                { hop: 1, ip: '192.168.1.102', hostname: 'dev-pc', location: '本地网络', responseTime: 0, status: 'online' },
+                { hop: 2, ip: '192.168.1.1', hostname: 'router-home', location: '本地网络', responseTime: 3, status: 'online' },
+                { hop: 3, ip: '10.0.0.1', hostname: 'gateway-isp', location: 'ISP网络', responseTime: 7, status: 'online' },
+                { hop: 4, ip: '203.0.113.1', hostname: 'core-router-1', location: 'ISP核心', responseTime: 12, status: 'online' },
+                { hop: 5, ip: '203.0.113.78', hostname: 'ssh-server', location: '目标网络', responseTime: 21, status: 'online' }
+              ]
+            },
+            {
+              id: 'TCP-20250731-004',
+              sourceIP: '192.168.1.103',
+              sourcePort: 51000,
+              destinationIP: '203.0.113.90',
+              destinationPort: 5432,
+              status: 'connected',
+              startTime: '2025-07-31 11:20:10',
+              duration: '30分钟',
+              bytesSent: 23456789,
+              bytesReceived: 87654321,
+              averageLatency: 35,
+              packetLossRate: 0.3,
+              pathNodes: [
+                { hop: 1, ip: '192.168.1.103', hostname: 'db-client', location: '本地网络', responseTime: 0, status: 'online' },
+                { hop: 2, ip: '192.168.1.1', hostname: 'router-home', location: '本地网络', responseTime: 5, status: 'online' },
+                { hop: 3, ip: '10.0.0.1', hostname: 'gateway-isp', location: 'ISP网络', responseTime: 4, status: 'online' },
+                { hop: 4, ip: '203.0.113.1', hostname: 'core-router-1', location: 'ISP核心', responseTime: 9, status: 'online' },
+                { hop: 5, ip: '45.32.12.1', hostname: 'edge-router', location: '目标网络', responseTime: 14, status: 'online' },
+                { hop: 6, ip: '203.0.113.90', hostname: 'database-server', location: '目标网络', responseTime: 8, status: 'online' }
+              ]
+            },
+            {
+              id: 'TCP-20250731-005',
+              sourceIP: '192.168.1.104',
+              sourcePort: 52000,
+              destinationIP: '203.0.113.112',
+              destinationPort: 8080,
+              status: 'connecting',
+              startTime: '2025-07-31 11:45:30',
+              duration: '5分钟',
+              bytesSent: 123456,
+              bytesReceived: 654321,
+              averageLatency: 60,
+              packetLossRate: 2.0,
+              pathNodes: [
+                { hop: 1, ip: '192.168.1.104', hostname: 'app-client', location: '本地网络', responseTime: 0, status: 'online' },
+                { hop: 2, ip: '192.168.1.1', hostname: 'router-home', location: '本地网络', responseTime: 4, status: 'online' },
+                { hop: 3, ip: '10.0.0.1', hostname: 'gateway-isp', location: 'ISP网络', responseTime: 8, status: 'online' },
+                { hop: 4, ip: '203.0.113.1', hostname: 'core-router-1', location: 'ISP核心', responseTime: 15, status: 'online' },
+                { hop: 5, ip: '45.32.12.1', hostname: 'edge-router', location: '目标网络', responseTime: 22, status: 'online' },
+                { hop: 6, ip: '203.0.113.112', hostname: 'app-server', location: '目标网络', responseTime: 11, status: 'online' }
+              ]
+            }
+          ]
+        }
+      },
+      computed: {
+        // 计算活跃连接数
+        activeConnections() {
+          return this.connections.filter(conn => conn.status === 'connected').length;
+        },
+        // 计算已断开连接数
+        disconnectedConnections() {
+          return this.connections.filter(conn => conn.status === 'disconnected').length;
+        },
+        // 计算平均连接时间
+        avgConnectionTime() {
+          if (this.activeConnections === 0) return 0;
+          // 这里简化处理，实际应从连接时间计算
+          return Math.floor(Math.random() * 30) + 10;
+        },
+        // 过滤后的连接列表
+        filteredConnections() {
+          let filtered = this.connections;
+          
+          // 按搜索词过滤
+          if (this.searchQuery) {
+            const query = this.searchQuery.toLowerCase();
+            filtered = filtered.filter(conn => 
+              conn.sourceIP.toLowerCase().includes(query) ||
+              conn.destinationIP.toLowerCase().includes(query) ||
+              conn.sourcePort.toString().includes(query) ||
+              conn.destinationPort.toString().includes(query)
+            );
+          }
+          
+          // 按状态过滤
+          if (this.statusFilter) {
+            filtered = filtered.filter(conn => conn.status === this.statusFilter);
+          }
+          
+          // 分页
+          const start = (this.currentPage - 1) * this.pageSize;
+          const end = start + this.pageSize;
+          return filtered.slice(start, end);
+        }
+      },
+      mounted() {
+        // 初始化连接数据
+        this.connections = this.mockConnections;
+        this.totalConnections = this.connections.length;
+        
+        // 模拟定时刷新
+        setInterval(() => {
+          this.refreshData();
+        }, 30000);
+      },
+      methods: {
+        // 格式化字节数
+        formatBytes(bytes, decimals = 2) {
+          if (bytes === 0) return '0 Bytes';
+          
+          const k = 1024;
+          const dm = decimals < 0 ? 0 : decimals;
+          const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+          
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          
+          return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        },
+        
+        // 获取状态文本
+        getStatusText(status) {
+          const statusMap = {
+            'connected': '已连接',
+            'disconnected': '已断开',
+            'connecting': '连接中',
+            'disconnecting': '断开中'
+          };
+          return statusMap[status] || status;
+        },
+        
+        // 获取状态标签类型
+        getStatusType(status) {
+          const typeMap = {
+            'connected': 'success',
+            'disconnected': 'danger',
+            'connecting': 'primary',
+            'disconnecting': 'warning'
+          };
+          return typeMap[status] || 'info';
+        },
+        
+        // 获取响应时间样式
+        getTimeClass(time) {
+          if (time < 30) return 'text-success';
+          if (time < 60) return 'text-warning';
+          return 'text-danger';
+        },
+        
+        // 处理行点击事件
+        handleRowClick(row) {
+          this.selectedConnection = row;
+          this.dialogVisible = true;
+        },
+        
+        // 处理详情按钮点击事件
+        handleDetailsClick(row, event) {
+          event.stopPropagation(); // 阻止事件冒泡
+          this.selectedConnection = row;
+          this.dialogVisible = true;
+        },
+        
+        // 关闭详情对话框
+        closeDialog() {
+          this.dialogVisible = false;
+          this.selectedConnection = {};
+        },
+        
+        // 保存连接详情
+        saveConnectionDetails() {
+          // 这里只是模拟保存操作
+          this.$message({
+            message: '连接详情已保存',
+            type: 'success'
+          });
+          this.dialogVisible = false;
+        },
+        
+        // 处理搜索
+        handleSearch() {
+          this.currentPage = 1; // 重置到第一页
+        },
+        
+        // 处理搜索清空
+        handleSearchClear() {
+          this.searchQuery = '';
+          this.currentPage = 1; // 重置到第一页
+        },
+        
+        // 重置筛选条件
+        resetFilters() {
+          this.searchQuery = '';
+          this.statusFilter = '';
+          this.currentPage = 1;
+        },
+        
+        // 处理每页数量变化
+        handleSizeChange(size) {
+          this.pageSize = size;
+        },
+        
+        // 处理当前页码变化
+        handleCurrentChange(page) {
+          this.currentPage = page;
+        },
+        
+        // 刷新数据
+        refreshData() {
+          // 模拟数据刷新
+          this.lastUpdateTime = new Date().toLocaleString();
+          this.$message({
+            message: '数据已更新',
+            type: 'success',
+            duration: 1500
+          });
+        }
+      }
+    });
+  </script>
+</body>
+</html>    

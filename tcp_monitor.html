@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TCP连接监控</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <!-- ElementUI 库 -->
+  <script src="https://unpkg.com/vue@2.7.14/dist/vue.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui@2.15.13/lib/theme-chalk/index.css">
+  <script src="https://unpkg.com/element-ui@2.15.13/lib/index.js"></script>
+  
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#1890ff',
+            success: '#52c41a',
+            warning: '#faad14',
+            danger: '#ff4d4f',
+            info: '#17a2b8',
+            dark: '#1f2937',
+            'dark-light': '#374151',
+            'gray-light': '#f3f4f6',
+          },
+          fontFamily: {
+            inter: ['Inter', 'sans-serif'],
+          },
+        },
+      }
+    }
+  </script>
+  
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .content-auto {
+        content-visibility: auto;
+      }
+      .connection-path {
+        stroke-dasharray: 1000;
+        stroke-dashoffset: 1000;
+        animation: dash 3s linear forwards;
+      }
+      .node-pulse {
+        animation: pulse 2s infinite;
+      }
+      .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+      }
+      .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+    }
+    
+    @keyframes dash {
+      to {
+        stroke-dashoffset: 0;
+      }
+    }
+    
+    @keyframes pulse {
+      0% {
+        r: 6;
+        opacity: 1;
+      }
+      50% {
+        r: 8;
+        opacity: 0.5;
+      }
+      100% {
+        r: 6;
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-50 font-inter text-gray-800">
+  <div id="app" class="min-h-screen flex flex-col">
+    <!-- 顶部导航栏 -->
+    <el-header class="bg-white shadow-sm py-4 px-6 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <i class="fa fa-server text-primary text-2xl"></i>
+        <h1 class="text-xl font-bold text-dark">TCP连接监控</h1>
+      </div>
+      <div class="flex items-center space-x-6">
+        <el-button type="primary" icon="el-icon-refresh" @click="refreshData">刷新</el-button>
+        <el-button type="success" icon="el-icon-plus" @click="addConnection">添加连接</el-button>
+        <el-button type="danger" icon="el-icon-delete" @click="deleteSelected">删除选中</el-button>
+      </div>
+    </el-header>
+    
+    <!-- 主要内容区 -->
+    <el-main class="flex-1 p-6">
+      <!-- 搜索和筛选 -->
+      <el-row class="mb-6">
+        <el-col :span="12">
+          <el-input
+            v-model="searchQuery"
+            placeholder="搜索IP地址..."
+            prefix-icon="el-icon-search"
+            class="w-full"
+            @keyup.enter="filterConnections"
+          ></el-input>
+        </el-col>
+        <el-col :span="4">
+          <el-select v-model="statusFilter" placeholder="筛选状态" class="w-full">
+            <el-option label="全部" value="all"></el-option>
+            <el-option label="活跃" value="active"></el-option>
+            <el-option label="断开" value="disconnected"></el-option>
+            <el-option label="警告" value="warning"></el-option>
+          </el-select>
+        </el-col>
+        <el-col :span="4">
+          <el-button type="primary" @click="filterConnections">筛选</el-button>
+        </el-col>
+      </el-row>
+      
+      <!-- 统计卡片 -->
+      <el-row class="mb-6" :gutter="20">
+        <el-col :span="6">
+          <el-card class="bg-white rounded-lg shadow-sm p-5">
+            <div class="flex justify-between items-start">
+              <div>
+                <p class="text-gray-500 text-sm">总连接数</p>
+                <h3 class="text-2xl font-bold mt-1">{{ totalConnections }}</h3>
+              </div>
+              <div class="bg-primary/10 p-3 rounded-lg">
+                <i class="fa fa-link text-primary text-xl"></i>
+              </div>
+            </div>
+            <div class="mt-4 text-xs text-success flex items-center">
+              <i class="fa fa-arrow-up mr-1"></i>
+              <span>较昨日 +{{ connectionGrowth }}%</span>
+            </div>
+          </el-card>
+        </el-col>
+        <el-col :span="6">
+          <el-card class="bg-white rounded-lg shadow-sm p-5">
+            <div class="flex justify-between items-start">
+              <div>
+                <p class="text-gray-500 text-sm">活跃连接</p>
+                <h3 class="text-2xl font-bold mt-1">{{ activeConnections }}</h3>
+              </div>
+              <div class="bg-success/10 p-3 rounded-lg">
+                <i class="fa fa-check-circle text-success text-xl"></i>
+              </div>
+            </div>
+            <div class="mt-4 text-xs text-success flex items-center">
+              <i class="fa fa-arrow-up mr-1"></i>
+              <span>较昨日 +{{ activeGrowth }}%</span>
+            </div>
+          </el-card>
+        </el-col>
+        <el-col :span="6">
+          <el-card class="bg-white rounded-lg shadow-sm p-5">
+            <div class="flex justify-between items-start">
+              <div>
+                <p class="text-gray-500 text-sm">平均响应时间</p>
+                <h3 class="text-2xl font-bold mt-1">{{ avgResponseTime }}ms</h3>
+              </div>
+              <div class="bg-warning/10 p-3 rounded-lg">
+                <i class="fa fa-clock-o text-warning text-xl"></i>
+              </div>
+            </div>
+            <div class="mt-4 text-xs text-danger flex items-center">
+              <i class="fa fa-arrow-up mr-1"></i>
+              <span>较昨日 +{{ latencyGrowth }}ms</span>
+            </div>
+          </el-card>
+        </el-col>
+        <el-col :span="6">
+          <el-card class="bg-white rounded-lg shadow-sm p-5">
+            <div class="flex justify-between items-start">
+              <div>
+                <p class="text-gray-500 text-sm">连接错误</p>
+                <h3 class="text-2xl font-bold mt-1">{{ errorConnections }}</h3>
+              </div>
+              <div class="bg-danger/10 p-3 rounded-lg">
+                <i class="fa fa-exclamation-triangle text-danger text-xl"></i>
+              </div>
+            </div>
+            <div class="mt-4 text-xs text-success flex items-center">
+              <i class="fa fa-arrow-down mr-1"></i>
+              <span>较昨日 -{{ errorReduction }}%</span>
+            </div>
+          </el-card>
+        </el-col>
+      </el-row>
+      
+      <!-- 连接列表和详情 -->
+      <el-row :gutter="20">
+        <!-- 连接列表 -->
+        <el-col :span="16">
+          <el-card class="bg-white rounded-lg shadow-sm p-5 h-full">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="font-bold text-lg">TCP连接列表</h3>
+              <el-checkbox v-model="showOnlySelected">仅显示选中</el-checkbox>
+            </div>
+            
+            <el-table
+              :data="displayConnections"
+              stripe
+              highlight-current-row
+              @selection-change="handleSelectionChange"
+              @row-click="showConnectionDetails"
+              ref="connectionTable"
+            >
+              <el-table-column type="selection" width="55"></el-table-column>
+              <el-table-column prop="id" label="ID" width="80"></el-table-column>
+              <el-table-column prop="source" label="源IP" width="150"></el-table-column>
+              <el-table-column prop="destination" label="目标IP" width="150"></el-table-column>
+              <el-table-column label="转发路径" width="200">
+                <template slot-scope="scope">
+                  <span class="px-2 py-1 bg-gray-100 rounded-full text-xs">
+                    {{ scope.row.path.length - 2 }} 个节点
+                  </span>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
+                <template slot-scope="scope">
+                  <el-tag
+                    :type="scope.row.status === 'active' ? 'success' : 
+                          scope.row.status === 'warning' ? 'warning' : 'danger'"
+                  >
+                    {{ scope.row.status === 'active' ? '活跃' : 
+                      scope.row.status === 'warning' ? '警告' : '断开' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="总响应时间" width="120">
+                <template slot-scope="scope">
+                  <span :class="getTimeClass(scope.row.totalTime)">
+                    {{ scope.row.totalTime }}ms
+                  </span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="100">
+                <template slot-scope="scope">
+                  <el-button
+                    size="mini"
+                    type="text"
+                    icon="el-icon-view"
+                    @click="showConnectionDetails(scope.row)"
+                  ></el-button>
+                  <el-button
+                    size="mini"
+                    type="text"
+                    icon="el-icon-delete"
+                    @click="deleteConnection(scope.row)"
+                  ></el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            
+            <!-- 分页 -->
+            <el-pagination
+              class="mt-4 flex justify-center"
+              @size-change="handleSizeChange"
+              @current-change="handleCurrentChange"
+              :current-page="currentPage"
+              :page-sizes="[10, 20, 50]"
+              :page-size="pageSize"
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="displayConnections.length"
+            ></el-pagination>
+          </el-card>
+        </el-col>
+        
+        <!-- 连接详情 -->
+        <el-col :span="8">
+          <el-card class="bg-white rounded-lg shadow-sm p-5 h-full">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="font-bold text-lg">连接详情</h3>
+              <el-button
+                size="small"
+                type="text"
+                icon="el-icon-full-screen"
+                @click="toggleFullscreen"
+              ></el-button>
+            </div>
+            
+            <div v-if="selectedConnection" class="space-y-4">
+              <!-- 基本信息 -->
+              <div class="bg-gray-50 p-4 rounded-lg">
+                <div class="flex justify-between items-center mb-3">
+                  <h4 class="font-semibold">连接信息</h4>
+                  <el-tag
+                    :type="selectedConnection.status === 'active' ? 'success' : 
+                          selectedConnection.status === 'warning' ? 'warning' : 'danger'"
+                  >
+                    {{ selectedConnection.status === 'active' ? '活跃' : 
+                      selectedConnection.status === 'warning' ? '警告' : '断开' }}
+                  </el-tag>
+                </div>
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <p class="text-gray-500">ID</p>
+                    <p class="font-medium">{{ selectedConnection.id }}</p>
+                  </div>
+                  <div>
+                    <p class="text-gray-500">建立时间</p>
+                    <p class="font-medium">{{ selectedConnection.establishedTime }}</p>
+                  </div>
+                  <div>
+                    <p class="text-gray-500">源IP</p>
+                    <p class="font-medium">{{ selectedConnection.source }}</p>
+                  </div>
+                  <div>
+                    <p class="text-gray-500">目标IP</p>
+                    <p class="font-medium">{{ selectedConnection.destination }}</p>
+                  </div>
+                  <div>
+                    <p class="text-gray-500">协议</p>
+                    <p class="font-medium">{{ selectedConnection.protocol }}</p>
+                  </div>
+                  <div>
+                    <p class="text-gray-500">总响应时间</p>
+                    <p class="font-medium text-warning">{{ selectedConnection.totalTime }}ms</p>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- 路径可视化 -->
+              <div>
+                <h4 class="font-semibold mb-2">连接路径</h4>
+                <div class="bg-gray-50 p-3 rounded-lg h-64 overflow-auto scrollbar-hide">
+                  <svg id="connection-path" viewBox="0 0 400 200" class="w-full h-full">
+                    <!-- 路径将通过JS动态生成 -->
+                  </svg>
+                </div>
+              </div>
+              
+              <!-- 节点响应时间 -->
+              <div>
+                <h4 class="font-semibold mb-2">节点响应时间</h4>
+                <div class="bg-gray-50 p-3 rounded-lg max-h-64 overflow-y-auto scrollbar-hide">
+                  <el-table :data="selectedConnection.path" stripe size="small">
+                    <el-table-column prop="ip" label="IP地址"></el-table-column>
+                    <el-table-column label="响应时间">
+                      <template slot-scope="scope">
+                        <span v-if="scope.row.time !== undefined" :class="getTimeClass(scope.row.time)">
+                          {{ scope.row.time }}ms
+                        </span>
+                        <span v-else>-</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="状态">
+                      <template slot-scope="scope">
+                        <el-tag
+                          v-if="scope.row.status !== undefined"
+                          :type="scope.row.status === 'active' ? 'success' : 
+                                scope.row.status === 'warning' ? 'warning' : 'danger'"
+                          size="mini"
+                        >
+                          {{ scope.row.status === 'active' ? '正常' : 
+                            scope.row.status === 'warning' ? '延迟' : '断开' }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </div>
+              
+              <!-- 操作按钮 -->
+              <div class="flex justify-between">
+                <el-button type="primary" icon="el-icon-refresh" @click="refreshConnection">
+                  刷新详情
+                </el-button>
+                <el-button type="danger" icon="el-icon-close" @click="closeConnection">
+                  关闭连接
+                </el-button>
+              </div>
+            </div>
+            
+            <div v-else class="flex flex-col items-center justify-center h-64 text-gray-400">
+              <i class="fa fa-info-circle text-4xl mb-3"></i>
+              <p>请从左侧列表中选择一个TCP连接查看详情</p>
+            </div>
+          </el-card>
+        </el-col>
+      </el-row>
+      
+      <!-- 性能监控图表 -->
+      <el-row class="mt-6">
+        <el-col :span="24">
+          <el-card class="bg-white rounded-lg shadow-sm p-5">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="font-bold text-lg">连接性能监控</h3>
+              <el-select v-model="chartTimeRange" placeholder="时间范围" size="small">
+                <el-option label="最近1小时" value="hour"></el-option>
+                <el-option label="最近24小时" value="day"></el-option>
+                <el-option label="最近7天" value="week"></el-option>
+                <el-option label="最近30天" value="month"></el-option>
+              </el-select>
+            </div>
+            <div class="h-80">
+              <div id="performance-chart" class="w-full h-full"></div>
+            </div>
+          </el-card>
+        </el-col>
+      </el-row>
+    </el-main>
+    
+    <!-- 底部信息 -->
+    <el-footer class="bg-white shadow-inner py-4 px-6 text-center text-sm text-gray-500">
+      <p>© 2025 TCP连接监控系统 | 最后更新时间: {{ lastUpdateTime }}</p>
+    </el-footer>
+    
+    <!-- 添加连接对话框 -->
+    <el-dialog :visible.sync="addDialogVisible" title="添加TCP连接">
+      <el-form :model="newConnection" label-width="120px">
+        <el-form-item label="源IP地址">
+          <el-input v-model="newConnection.source" placeholder="请输入源IP地址"></el-input>
+        </el-form-item>
+        <el-form-item label="目标IP地址">
+          <el-input v-model="newConnection.destination" placeholder="请输入目标IP地址"></el-input>
+        </el-form-item>
+        <el-form-item label="端口号">
+          <el-input v-model.number="newConnection.port" placeholder="请输入端口号"></el-input>
+        </el-form-item>
+        <el-form-item label="协议类型">
+          <el-radio-group v-model="newConnection.protocol">
+            <el-radio label="TCP">TCP</el-radio>
+            <el-radio label="UDP">UDP</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <div slot="footer" class="dialog-footer">
+        <el-button @click="addDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveConnection">确定</el-button>
+      </div>
+    </el-dialog>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          // 连接数据
+          connections: [],
+          filteredConnections: [],
+          displayConnections: [],
+          selectedConnections: [],
+          selectedConnection: null,
+          
+          // 搜索和筛选
+          searchQuery: '',
+          statusFilter: 'all',
+          showOnlySelected: false,
+          
+          // 分页
+          currentPage: 1,
+          pageSize: 10,
+          
+          // 图表
+          chartTimeRange: 'day',
+          performanceChart: null,
+          
+          // 对话框
+          addDialogVisible: false,
+          newConnection: {
+            source: '',
+            destination: '',
+            port: 80,
+            protocol: 'TCP'
+          },
+          
+          // 其他
+          lastUpdateTime: '',
+          isFullscreen: false
+        }
+      },
+      computed: {
+        totalConnections() {
+          return this.connections.length;
+        },
+        activeConnections() {
+          return this.connections.filter(conn => conn.status === 'active').length;
+        },
+        errorConnections() {
+          return this.connections.filter(conn => conn.status === 'disconnected').length;
+        },
+        avgResponseTime() {
+          const activeConns = this.connections.filter(conn => conn.status !== 'disconnected');
+          if (activeConns.length === 0) return 0;
+          const totalTime = activeConns.reduce((sum, conn) => sum + conn.totalTime, 0);
+          return Math.round(totalTime / activeConns.length);
+        },
+        connectionGrowth() {
+          return Math.floor(Math.random() * 10) + 1;
+        },
+        activeGrowth() {
+          return Math.floor(Math.random() * 15) + 1;
+        },
+        latencyGrowth() {
+          return Math.floor(Math.random() * 5) + 1;
+        },
+        errorReduction() {
+          return Math.floor(Math.random() * 8) + 1;
+        }
+      },
+      mounted() {
+        // 初始化数据
+        this.initData();
+        this.updateLastUpdateTime();
+        
+        // 初始化性能图表
+        this.initPerformanceChart();
+        
+        // 定时刷新数据
+        setInterval(() => {
+          this.refreshData();
+        }, 10000);
+      },
+      methods: {
+        // 初始化数据
+        initData() {
+          // 生成模拟数据
+          this.connections = [];
+          for (let i = 1; i <= 30; i++) {
+            const status = ['active', 'warning', 'disconnected'][Math.floor(Math.random() * 3)];
+            const totalTime = status === 'disconnected' ? 0 : Math.floor(Math.random() * 300) + 50;
+            
+            // 生成随机IP地址
+            const generateIp = () => {
+              return `${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}`;
+            };
+            
+            // 生成转发路径
+            const pathLength = Math.floor(Math.random() * 4) + 2;
+            const path = [{
+              ip: generateIp(),
+              time: 0,
+              status: 'active'
+            }];
+            
+            let cumulativeTime = 0;
+            for (let j = 1; j < pathLength - 1; j++) {
+              const nodeTime = Math.floor(Math.random() * 50) + 10;
+              cumulativeTime += nodeTime;
+              path.push({
+                ip: generateIp(),
+                time: nodeTime,
+                status: nodeTime > 40 ? 'warning' : 'active'
+              });
+            }
+            
+            path.push({
+              ip: generateIp(),
+              time: totalTime - cumulativeTime,
+              status: status === 'disconnected' ? 'disconnected' : (totalTime - cumulativeTime > 40 ? 'warning' : 'active')
+            });
+            
+            this.connections.push({
+              id: i,
+              source: generateIp(),
+              destination: generateIp(),
+              port: [80, 443, 22, 21, 3306][Math.floor(Math.random() * 5)],
+              protocol: ['TCP', 'UDP'][Math.floor(Math.random() * 2)],
+              status: status,
+              totalTime: totalTime,
+              path: path,
+              establishedTime: this.generateRandomTime()
+            });
+          }
+          
+          this.filterConnections();
+        },
+        
+        // 生成随机时间
+        generateRandomTime() {
+          const now = new Date();
+          const randomMinutes = Math.floor(Math.random() * 60 * 24 * 7); // 随机一周内
+          now.setMinutes(now.getMinutes() - randomMinutes);
+          return now.toLocaleString();
+        },
+        
+        // 筛选连接
+        filterConnections() {
+          // 先根据搜索查询和状态筛选
+          this.filteredConnections = this.connections.filter(conn => {
+            const searchMatch = 
+              conn.source.includes(this.searchQuery) || 
+              conn.destination.includes(this.searchQuery) ||
+              conn.path.some(node => node.ip.includes(this.searchQuery));
+            
+            const statusMatch = 
+              this.statusFilter === 'all' || 
+              conn.status === this.statusFilter;
+              
+            return searchMatch && statusMatch;
+          });
+          
+          // 再根据是否仅显示选中筛选
+          if (this.showOnlySelected && this.selectedConnections.length > 0) {
+            this.displayConnections = this.filteredConnections.filter(conn => 
+              this.selectedConnections.some(selected => selected.id === conn.id)
+            );
+          } else {
+            this.displayConnections = [...this.filteredConnections];
+          }
+          
+          // 重置当前页
+          this.currentPage = 1;
+        },
+        
+        // 处理分页大小变化
+        handleSizeChange(size) {
+          this.pageSize = size;
+        },
+        
+        // 处理当前页变化
+        handleCurrentChange(page) {
+          this.currentPage = page;
+        },
+        
+        // 处理选择变化
+        handleSelectionChange(selection) {
+          this.selectedConnections = selection;
+          if (selection.length === 1) {
+            this.selectedConnection = selection[0];
+            this.drawConnectionPath();
+          } else if (selection.length === 0) {
+            this.selectedConnection = null;
+          }
+        },
+        
+        // 显示连接详情
+        showConnectionDetails(row) {
+          this.$refs.connectionTable.toggleRowSelection(row);
+          this.selectedConnection = row;
+          this.drawConnectionPath();
+        },
+        
+        // 绘制连接路径
+        drawConnectionPath() {
+          if (!this.selectedConnection) return;
+          
+          const svg = document.getElementById('connection-path');
+          svg.innerHTML = '';
+          
+          const path = this.selectedConnection.path;
+          const nodeCount = path.length;
+          const spacing = 350 / (nodeCount - 1);
+          
+          // 绘制连接线
+          for (let i = 0; i < nodeCount - 1; i++) {
+            const x1 = 20 + i * spacing;
+            const y1 = 100;
+            const x2 = 20 + (i + 1) * spacing;
+            const y2 = 100;
+            
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', x1);
+            line.setAttribute('y1', y1);
+            line.setAttribute('x2', x2);
+            line.setAttribute('y2', y2);
+            line.setAttribute('stroke', '#e2e8f0');
+            line.setAttribute('stroke-width', '2');
+            line.setAttribute('class', 'connection-path');
+            
+            svg.appendChild(line);
+          }
+          
+          // 绘制节点
+          path.forEach((node, index) => {
+            const x = 20 + index * spacing;
+            const y = 100;
+            
+            // 节点状态样式
+            let fillColor = '#10b981'; // 正常
+            if (node.status === 'warning') fillColor = '#f59e0b';
+            if (node.status === 'disconnected') fillColor = '#ef4444';
+            
+            // 节点
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('cx', x);
+            circle.setAttribute('cy', y);
+            circle.setAttribute('r', '6');
+            circle.setAttribute('fill', fillColor);
+            if (index === 0 || index === path.length - 1) {
+              circle.setAttribute('class', 'node-pulse');
+            }
+            
+            svg.appendChild(circle);
+            
+            // 节点IP
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', x);
+            text.setAttribute('y', y - 15);
+            text.setAttribute('text-anchor', 'middle');
+            text.setAttribute('font-size', '10');
+            text.setAttribute('fill', '#374151');
+            text.textContent = node.ip;
+            
+            svg.appendChild(text);
+            
+            // 节点响应时间
+            if (node.time !== undefined) {
+              const timeText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+              timeText.setAttribute('x', x);
+              timeText.setAttribute('y', y + 30);
+              timeText.setAttribute('text-anchor', 'middle');
+              timeText.setAttribute('font-size', '10');
+              
+              // 设置时间文本颜色
+              let timeColor = '#10b981'; // 正常
+              if (node.time > 40) timeColor = '#f59e0b';
+              
+              timeText.setAttribute('fill', timeColor);
+              timeText.textContent = `${node.time}ms`;
+              
+              svg.appendChild(timeText);
+            }
+          });
+        },
+        
+        // 获取时间状态类
+        getTimeClass(time) {
+          if (time > 150) return 'text-danger font-medium';
+          if (time > 80) return 'text-warning font-medium';
+          return 'text-success font-medium';
+        },
+        
+        // 初始化性能图表
+        initPerformanceChart() {
+          this.performanceChart = echarts.init(document.getElementById('performance-chart'));
+          
+          const option = {
+            tooltip: {
+              trigger: 'axis',
+              axisPointer: {
+                type: 'cross',
+                crossStyle: {
+                  color: '#999'
+                }
+              }
+            },
+            legend: {
+              data: ['平均响应时间', '活跃连接数', '连接错误数']
+            },
+            grid: {
+              left: '3%',
+              right: '4%',
+              bottom: '3%',
+              containLabel: true
+            },
+            xAxis: {
+              type: 'category',
+              boundaryGap: false,
+              data: this.generateTimeLabels()
+            },
+            yAxis: [
+              {
+                type: 'value',
+                name: '响应时间(ms)',
+                min: 0,
+                max: 300,
+                interval: 50,
+                axisLabel: {
+                  formatter: '{value}ms'
+                }
+              },
+              {
+                type: 'value',
+                name: '连接数',
+                min: 0,
+                max: 40,
+                interval: 10,
+                axisLabel: {
+                  formatter: '{value}个'
+                }
+              }
+            ],
+            series: [
+              {
+                name: '平均响应时间',
+                type: 'line',
+                data: this.generateRandomData(24, 80, 200),
+                yAxisIndex: 0,
+                color: '#1890ff'
+              },
+              {
+                name: '活跃连接数',
+                type: 'line',
+                data: this.generateRandomData(24, 15, 30),
+                yAxisIndex: 1,
+                color: '#52c41a'
+              },
+              {
+                name: '连接错误数',
+                type: 'line',
+                data: this.generateRandomData(24, 0, 5),
+                yAxisIndex: 1,
+                color: '#ff4d4f'
+              }
+            ]
+          };
+          
+          this.performanceChart.setOption(option);
+          
+          // 监听窗口大小变化，调整图表
+          window.addEventListener('resize', () => {
+            this.performanceChart.resize();
+          });
+        },
+        
+        // 生成时间标签
+        generateTimeLabels() {
+          const labels = [];
+          const now = new Date();
+          
+          for (let i = 23; i >= 0; i--) {
+            const time = new Date(now);
+            time.setHours(time.getHours() - i);
+            labels.push(time.getHours() + ':00');
+          }
+          
+          return labels;
+        },
+        
+        // 生成随机数据
+        generateRandomData(count, min, max) {
+          const data = [];
+          for (let i = 0; i < count; i++) {
+            data.push(Math.floor(Math.random() * (max - min + 1)) + min);
+          }
+          return data;
+        },
+        
+        // 更新最后更新时间
+        updateLastUpdateTime() {
+          const now = new Date();
+          this.lastUpdateTime = now.toLocaleString();
+        },
+        
+        // 刷新数据
+        refreshData() {
+          // 更新部分连接状态
+          this.connections.forEach(conn => {
+            if (Math.random() < 0.1) { // 10%的概率更新状态
+              const newStatus = ['active', 'warning', 'disconnected'][Math.floor(Math.random() * 3)];
+              conn.status = newStatus;
+              
+              if (newStatus !== 'disconnected') {
+                conn.totalTime = Math.floor(Math.random() * 300) + 50;
+                
+                // 更新路径节点
+                let cumulativeTime = 0;
+                conn.path.forEach((node, index) => {
+                  if (index === 0) {
+                    node.time = 0;
+                    node.status = 'active';
+                  } else if (index === conn.path.length - 1) {
+                    node.time = conn.totalTime - cumulativeTime;
+                    node.status = conn.totalTime - cumulativeTime > 40 ? 'warning' : 'active';
+                  } else {
+                    const nodeTime = Math.floor(Math.random() * 50) + 10;
+                    cumulativeTime += nodeTime;
+                    node.time = nodeTime;
+                    node.status = nodeTime > 40 ? 'warning' : 'active';
+                  }
+                });
+              } else {
+                conn.totalTime = 0;
+                conn.path.forEach(node => {
+                  node.status = 'disconnected';
+                });
+              }
+            }
+          });
+          
+          // 重新筛选
+          this.filterConnections();
+          
+          // 更新图表
+          if (this.performanceChart) {
+            const option = this.performanceChart.getOption();
+            option.series[0].data = this.generateRandomData(24, 80, 200);
+            option.series[1].data = this.generateRandomData(24, 15, 30);
+            option.series[2].data = this.generateRandomData(24, 0, 5);
+            this.performanceChart.setOption(option);
+          }
+          
+          // 更新最后更新时间
+          this.updateLastUpdateTime();
+          
+          // 重绘路径图
+          if (this.selectedConnection) {
+            this.drawConnectionPath();
+          }
+        },
+        
+        // 刷新连接详情
+        refreshConnection() {
+          if (this.selectedConnection) {
+            const index = this.connections.findIndex(conn => conn.id === this.selectedConnection.id);
+            if (index !== -1) {
+              // 更新状态
+              const newStatus = ['active', 'warning', 'disconnected'][Math.floor(Math.random() * 3)];
+              this.connections[index].status = newStatus;
+              
+              if (newStatus !== 'disconnected') {
+                this.connections[index].totalTime = Math.floor(Math.random() * 300) + 50;
+                
+                // 更新路径节点
+                let cumulativeTime = 0;
+                this.connections[index].path.forEach((node, index) => {
+                  if (index === 0) {
+                    node.time = 0;
+                    node.status = 'active';
+                  } else if (index === this.connections[index].path.length - 1) {
+                    node.time = this.connections[index].totalTime - cumulativeTime;
+                    node.status = this.connections[index].totalTime - cumulativeTime > 40 ? 'warning' : 'active';
+                  } else {
+                    const nodeTime = Math.floor(Math.random() * 50) + 10;
+                    cumulativeTime += nodeTime;
+                    node.time = nodeTime;
+                    node.status = nodeTime > 40 ? 'warning' : 'active';
+                  }
+                });
+              } else {
+                this.connections[index].totalTime = 0;
+                this.connections[index].path.forEach(node => {
+                  node.status = 'disconnected';
+                });
+              }
+              
+              // 更新选中的连接
+              this.selectedConnection = JSON.parse(JSON.stringify(this.connections[index]));
+              
+              // 重绘路径图
+              this.drawConnectionPath();
+              
+              // 更新最后更新时间
+              this.updateLastUpdateTime();
+              
+              this.$message({
+                type: 'success',
+                message: '连接详情已刷新'
+              });
+            }
+          }
+        },
+        
+        // 关闭连接
+        closeConnection() {
+          if (this.selectedConnection) {
+            const index = this.connections.findIndex(conn => conn.id === this.selectedConnection.id);
+            if (index !== -1) {
+              this.connections[index].status = 'disconnected';
+              this.connections[index].totalTime = 0;
+              this.connections[index].path.forEach(node => {
+                node.status = 'disconnected';
+                node.time = undefined;
+              });
+              
+              // 更新选中的连接
+              this.selectedConnection = JSON.parse(JSON.stringify(this.connections[index]));
+              
+              // 重绘路径图
+              this.drawConnectionPath();
+              
+              this.$message({
+                type: 'success',
+                message: '连接已关闭'
+              });
+            }
+          }
+        },
+        
+        // 删除连接
+        deleteConnection(row) {
+          this.$confirm('确定要删除此连接吗?', '提示', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            type: 'warning'
+          }).then(() => {
+            const index = this.connections.findIndex(conn => conn.id === row.id);
+            if (index !== -1) {
+              this.connections.splice(index, 1);
+              
+              // 如果删除的是当前选中的连接
+              if (this.selectedConnection && this.selectedConnection.id === row.id) {
+                this.selectedConnection = null;
+              }
+              
+              // 重新筛选
+              this.filterConnections();
+              
+              this.$message({
+                type: 'success',
+                message: '连接已删除'
+              });
+            }
+          }).catch(() => {
+            // 用户取消操作
+          });
+        },
+        
+        // 删除选中的连接
+        deleteSelected() {
+          if (this.selectedConnections.length === 0) {
+            this.$message({
+              type: 'warning',
+              message: '请先选择要删除的连接'
+            });
+            return;
+          }
+          
+          this.$confirm('确定要删除选中的连接吗?', '提示', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            type: 'warning'
+          }).then(() => {
+            const selectedIds = this.selectedConnections.map(conn => conn.id);
+            this.connections = this.connections.filter(conn => !selectedIds.includes(conn.id));
+            
+            // 如果删除了当前选中的连接
+            if (this.selectedConnection && selectedIds.includes(this.selectedConnection.id)) {
+              this.selectedConnection = null;
+            }
+            
+            // 清空选中
+            this.selectedConnections = [];
+            
+            // 重新筛选
+            this.filterConnections();
+            
+            this.$message({
+              type: 'success',
+              message: `已删除 ${selectedIds.length} 个连接`
+            });
+          }).catch(() => {
+            // 用户取消操作
+          });
+        },
+        
+        // 添加连接对话框
+        addConnection() {
+          this.newConnection = {
+            source: '',
+            destination: '',
+            port: 80,
+            protocol: 'TCP'
+          };
+          this.addDialogVisible = true;
+        },
+        
+        // 保存新连接
+        saveConnection() {
+          // 验证
+          if (!this.newConnection.source || !this.newConnection.destination) {
+            this.$message({
+              type: 'error',
+              message: '源IP和目标IP不能为空'
+            });
+            return;
+          }
+          
+          // 创建新连接
+          const newId = Math.max(0, ...this.connections.map(conn => conn.id)) + 1;
+          
+          // 生成转发路径
+          const pathLength = Math.floor(Math.random() * 4) + 2;
+          const path = [{
+            ip: this.newConnection.source,
+            time: 0,
+            status: 'active'
+          }];
+          
+          let cumulativeTime = 0;
+          for (let j = 1; j < pathLength - 1; j++) {
+            const nodeTime = Math.floor(Math.random() * 50) + 10;
+            cumulativeTime += nodeTime;
+            path.push({
+              ip: `${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}`,
+              time: nodeTime,
+              status: nodeTime > 40 ? 'warning' : 'active'
+            });
+          }
+          
+          const totalTime = cumulativeTime + Math.floor(Math.random() * 50) + 10;
+          
+          path.push({
+            ip: this.newConnection.destination,
+            time: totalTime - cumulativeTime,
+            status: totalTime - cumulativeTime > 40 ? 'warning' : 'active'
+          });
+          
+          // 添加到连接列表
+          this.connections.push({
+            id: newId,
+            source: this.newConnection.source,
+            destination: this.newConnection.destination,
+            port: this.newConnection.port,
+            protocol: this.newConnection.protocol,
+            status: 'active',
+            totalTime: totalTime,
+            path: path,
+            establishedTime: new Date().toLocaleString()
+          });
+          
+          // 重新筛选
+          this.filterConnections();
+          
+          // 关闭对话框
+          this.addDialogVisible = false;
+          
+          this.$message({
+            type: 'success',
+            message: '新连接已添加'
+          });
+        },
+        
+        // 切换详情全屏
+        toggleFullscreen() {
+          this.isFullscreen = !this.isFullscreen;
+          const detailCard = document.querySelector('.el-col:nth-child(2) .el-card');
+          
+          if (this.isFullscreen) {
+            detailCard.classList.add('fixed', 'inset-0', 'z-50', 'm-0');
+          } else {
+            detailCard.classList.remove('fixed', 'inset-0', 'z-50', 'm-0');
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
+    
