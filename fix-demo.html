@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>金融FIX协议模拟器</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  <style>
+    :root {
+      --primary-color: #1e3a8a;
+      --secondary-color: #3b82f6;
+      --success-color: #10b981;
+      --warning-color: #f59e0b;
+      --danger-color: #ef4444;
+      --dark-bg: #1e293b;
+      --light-bg: #f8fafc;
+      --card-bg: #ffffff;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f0f2f5;
+      color: #334155;
+    }
+    
+    .fix-simulator {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    
+    .app-header {
+      background: linear-gradient(135deg, var(--primary-color), #0f172a);
+      color: white;
+      padding: 15px 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    }
+    
+    .app-title {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    
+    .app-title h1 {
+      font-size: 1.8rem;
+      font-weight: 500;
+    }
+    
+    .app-logo {
+      width: 40px;
+      height: 40px;
+      background-color: var(--secondary-color);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+    }
+    
+    .app-content {
+      display: flex;
+      flex: 1;
+      padding: 20px;
+      gap: 20px;
+    }
+    
+    .left-panel {
+      width: 30%;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    
+    .right-panel {
+      width: 70%;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    
+    .card {
+      background: var(--card-bg);
+      border-radius: 10px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+      overflow: hidden;
+    }
+    
+    .card-header {
+      padding: 15px 20px;
+      background-color: var(--light-bg);
+      border-bottom: 1px solid #e2e8f0;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .card-body {
+      padding: 20px;
+    }
+    
+    .connection-form .el-form-item {
+      margin-bottom: 18px;
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 500;
+    }
+    
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background-color: #94a3b8;
+    }
+    
+    .status-dot.connected {
+      background-color: var(--success-color);
+      box-shadow: 0 0 8px var(--success-color);
+    }
+    
+    .status-dot.connecting {
+      background-color: var(--warning-color);
+      box-shadow: 0 0 8px var(--warning-color);
+    }
+    
+    .action-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+    }
+    
+    .message-builder {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+    
+    .message-type-selector {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    
+    .message-type-btn {
+      flex: 1;
+      min-width: 120px;
+      text-align: center;
+      padding: 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #f8fafc;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .message-type-btn:hover {
+      border-color: var(--secondary-color);
+      background: #eff6ff;
+    }
+    
+    .message-type-btn.active {
+      background: var(--secondary-color);
+      color: white;
+      border-color: var(--secondary-color);
+    }
+    
+    .message-fields {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+    }
+    
+    .message-field {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .message-field label {
+      font-size: 0.85rem;
+      margin-bottom: 5px;
+      color: #64748b;
+    }
+    
+    .message-history {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .history-tabs {
+      display: flex;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    
+    .history-tab {
+      padding: 10px 20px;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+    }
+    
+    .history-tab.active {
+      border-bottom-color: var(--secondary-color);
+      color: var(--secondary-color);
+      font-weight: 500;
+    }
+    
+    .history-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 15px 0;
+    }
+    
+    .history-item {
+      padding: 12px 20px;
+      border-bottom: 1px solid #f1f5f9;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9rem;
+    }
+    
+    .history-item.sent {
+      background-color: #f0f9ff;
+      border-left: 3px solid var(--secondary-color);
+    }
+    
+    .history-item.received {
+      background-color: #f0fdf4;
+      border-left: 3px solid var(--success-color);
+    }
+    
+    .history-item .timestamp {
+      font-size: 0.8rem;
+      color: #64748b;
+      margin-bottom: 5px;
+    }
+    
+    .metrics-container {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 15px;
+    }
+    
+    .metric-card {
+      text-align: center;
+      padding: 20px;
+      background: var(--light-bg);
+      border-radius: 8px;
+    }
+    
+    .metric-value {
+      font-size: 1.8rem;
+      font-weight: 700;
+      margin: 10px 0;
+      color: var(--primary-color);
+    }
+    
+    .metric-label {
+      font-size: 0.9rem;
+      color: #64748b;
+    }
+    
+    .connection-list {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    
+    .connection-item {
+      padding: 12px 15px;
+      border-bottom: 1px solid #f1f5f9;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    
+    .connection-item:hover {
+      background-color: #f8fafc;
+    }
+    
+    .connection-item.active {
+      background-color: #dbeafe;
+      border-left: 3px solid var(--secondary-color);
+    }
+    
+    .connection-item .name {
+      font-weight: 500;
+      margin-bottom: 5px;
+    }
+    
+    .connection-item .details {
+      font-size: 0.85rem;
+      color: #64748b;
+      display: flex;
+      justify-content: space-between;
+    }
+    
+    @media (max-width: 1200px) {
+      .app-content {
+        flex-direction: column;
+      }
+      
+      .left-panel, .right-panel {
+        width: 100%;
+      }
+      
+      .metrics-container {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="fix-simulator">
+      <!-- 顶部标题栏 -->
+      <header class="app-header">
+        <div class="app-title">
+          <div class="app-logo">FX</div>
+          <h1>FIX协议模拟器</h1>
+        </div>
+        <div class="status-indicator">
+          <div class="status-dot" :class="connectionStatus"></div>
+          <span>{{ statusText }}</span>
+        </div>
+      </header>
+      
+      <!-- 主内容区 -->
+      <div class="app-content">
+        <!-- 左侧面板 -->
+        <div class="left-panel">
+          <!-- 连接配置 -->
+          <div class="card">
+            <div class="card-header">
+              <span>连接配置</span>
+              <el-button type="primary" size="mini" @click="showConnectionDialog">添加配置</el-button>
+            </div>
+            <div class="card-body">
+              <div class="connection-list">
+                <div v-for="(config, index) in connections" 
+                     :key="index"
+                     class="connection-item"
+                     :class="{ active: currentConnection === index }"
+                     @click="selectConnection(index)">
+                  <div class="name">{{ config.name }}</div>
+                  <div class="details">
+                    <span>{{ config.host }}:{{ config.port }}</span>
+                    <span>{{ config.targetCompID }}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="connection-form">
+                <el-form label-position="top" v-if="currentConfig">
+                  <el-form-item label="主机地址">
+                    <el-input v-model="currentConfig.host" placeholder="fix.example.com"></el-input>
+                  </el-form-item>
+                  <el-form-item label="端口">
+                    <el-input v-model="currentConfig.port" placeholder="9876"></el-input>
+                  </el-form-item>
+                  <el-form-item label="发送方ID">
+                    <el-input v-model="currentConfig.senderCompID"></el-input>
+                  </el-form-item>
+                  <el-form-item label="目标ID">
+                    <el-input v-model="currentConfig.targetCompID"></el-input>
+                  </el-form-item>
+                  <el-form-item label="用户名">
+                    <el-input v-model="currentConfig.username"></el-input>
+                  </el-form-item>
+                  <el-form-item label="密码">
+                    <el-input v-model="currentConfig.password" type="password"></el-input>
+                  </el-form-item>
+                </el-form>
+                
+                <div class="action-buttons">
+                  <el-button type="primary" @click="connect" :loading="isConnecting">
+                    {{ isConnected ? '重新连接' : '连接' }}
+                  </el-button>
+                  <el-button @click="disconnect" :disabled="!isConnected">断开</el-button>
+                  <el-button type="success" @click="saveConnection">保存</el-button>
+                  <el-button type="danger" @click="deleteConnection">删除</el-button>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 消息构建器 -->
+          <div class="card">
+            <div class="card-header">
+              <span>FIX消息构建器</span>
+            </div>
+            <div class="card-body">
+              <div class="message-builder">
+                <div class="message-type-selector">
+                  <div v-for="(msg, index) in messageTypes" 
+                       :key="index"
+                       class="message-type-btn"
+                       :class="{ active: currentMessageType === msg.type }"
+                       @click="selectMessageType(msg.type)">
+                    {{ msg.name }} ({{ msg.type }})
+                  </div>
+                </div>
+                
+                <div class="message-fields">
+                  <div class="message-field" v-for="(field, index) in currentFields" :key="index">
+                    <label>{{ field.label }} ({{ field.tag }})</label>
+                    <el-input v-model="field.value" :placeholder="field.placeholder"></el-input>
+                  </div>
+                </div>
+                
+                <el-button type="primary" @click="sendMessage" :disabled="!isConnected">发送消息</el-button>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 右侧面板 -->
+        <div class="right-panel">
+          <!-- 消息历史 -->
+          <div class="card message-history">
+            <div class="card-header">
+              <div class="history-tabs">
+                <div class="history-tab" :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">全部消息</div>
+                <div class="history-tab" :class="{ active: activeTab === 'sent' }" @click="activeTab = 'sent'">已发送</div>
+                <div class="history-tab" :class="{ active: activeTab === 'received' }" @click="activeTab = 'received'">已接收</div>
+              </div>
+              <el-button type="text" @click="clearHistory">清空历史</el-button>
+            </div>
+            <div class="card-body history-content">
+              <div v-for="(msg, index) in filteredHistory" :key="index" class="history-item" :class="msg.direction">
+                <div class="timestamp">{{ msg.timestamp }} | {{ msg.direction === 'sent' ? '发送' : '接收' }} | {{ msg.type }}</div>
+                <pre>{{ formatFixMessage(msg.message) }}</pre>
+              </div>
+              <div v-if="filteredHistory.length === 0" class="no-history">
+                没有消息记录
+              </div>
+            </div>
+          </div>
+          
+          <!-- 性能指标 -->
+          <div class="card">
+            <div class="card-header">
+              <span>性能指标</span>
+            </div>
+            <div class="card-body">
+              <div class="metrics-container">
+                <div class="metric-card">
+                  <div class="metric-value">{{ metrics.messagesSent }}</div>
+                  <div class="metric-label">已发送消息</div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-value">{{ metrics.messagesReceived }}</div>
+                  <div class="metric-label">已接收消息</div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-value">{{ metrics.avgResponse }}ms</div>
+                  <div class="metric-label">平均响应时间</div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-value">{{ metrics.successRate }}%</div>
+                  <div class="metric-label">成功率</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 添加连接对话框 -->
+    <el-dialog title="添加连接配置" :visible.sync="connectionDialogVisible" width="500px">
+      <el-form :model="newConnection" label-position="top">
+        <el-form-item label="配置名称">
+          <el-input v-model="newConnection.name" placeholder="生产环境"></el-input>
+        </el-form-item>
+        <el-form-item label="主机地址">
+          <el-input v-model="newConnection.host" placeholder="fix.example.com"></el-input>
+        </el-form-item>
+        <el-form-item label="端口">
+          <el-input v-model="newConnection.port" placeholder="9876"></el-input>
+        </el-form-item>
+      </el-form>
+      <span slot="footer" class="dialog-footer">
+        <el-button @click="connectionDialogVisible = false">取 消</el-button>
+        <el-button type="primary" @click="addConnection">确 定</el-button>
+      </span>
+    </el-dialog>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          connections: [
+            {
+              name: "模拟测试环境",
+              host: "fix-simulator.example.com",
+              port: "9876",
+              senderCompID: "TRADER01",
+              targetCompID: "BROKER01",
+              username: "trader01",
+              password: "password123"
+            },
+            {
+              name: "开发环境",
+              host: "dev-fix.example.com",
+              port: "9876",
+              senderCompID: "DEV_TRADER",
+              targetCompID: "DEV_BROKER",
+              username: "dev_user",
+              password: "dev_pass"
+            }
+          ],
+          currentConnection: 0,
+          isConnected: false,
+          isConnecting: false,
+          connectionDialogVisible: false,
+          newConnection: {
+            name: "",
+            host: "",
+            port: ""
+          },
+          messageTypes: [
+            { type: "A", name: "登录请求" },
+            { type: "D", name: "新订单" },
+            { type: "F", name: "订单取消" },
+            { type: "G", name: "订单修改" },
+            { type: "8", name: "执行报告" },
+            { type: "BE", name: "分配报告" }
+          ],
+          currentMessageType: "D",
+          messageFields: {
+            "A": [
+              { tag: "553", label: "用户名", value: "", placeholder: "输入用户名" },
+              { tag: "554", label: "密码", value: "", placeholder: "输入密码" },
+              { tag: "98", label: "加密方法", value: "0", placeholder: "0=None" },
+              { tag: "108", label: "心跳间隔", value: "30", placeholder: "秒" }
+            ],
+            "D": [
+              { tag: "11", label: "客户端订单ID", value: "", placeholder: "唯一订单ID" },
+              { tag: "55", label: "标的代码", value: "", placeholder: "例如: AAPL" },
+              { tag: "54", label: "方向", value: "1", placeholder: "1=买, 2=卖" },
+              { tag: "40", label: "订单类型", value: "2", placeholder: "1=市价, 2=限价" },
+              { tag: "44", label: "价格", value: "", placeholder: "限价单价格" },
+              { tag: "38", label: "数量", value: "100", placeholder: "订单数量" },
+              { tag: "59", label: "时效", value: "0", placeholder: "0=当日有效" }
+            ],
+            "F": [
+              { tag: "11", label: "客户端订单ID", value: "", placeholder: "新订单ID" },
+              { tag: "41", label: "原始订单ID", value: "", placeholder: "要取消的订单ID" },
+              { tag: "55", label: "标的代码", value: "", placeholder: "例如: AAPL" },
+              { tag: "54", label: "方向", value: "1", placeholder: "1=买, 2=卖" },
+              { tag: "38", label: "数量", value: "100", placeholder: "取消数量" }
+            ],
+            "G": [
+              { tag: "11", label: "客户端订单ID", value: "", placeholder: "新订单ID" },
+              { tag: "41", label: "原始订单ID", value: "", placeholder: "要修改的订单ID" },
+              { tag: "55", label: "标的代码", value: "", placeholder: "例如: AAPL" },
+              { tag: "38", label: "数量", value: "100", placeholder: "新数量" },
+              { tag: "44", label: "价格", value: "", placeholder: "新价格" }
+            ],
+            "8": [
+              { tag: "37", label: "订单ID", value: "", placeholder: "订单ID" },
+              { tag: "17", label: "执行ID", value: "", placeholder: "唯一执行ID" },
+              { tag: "150", label: "执行类型", value: "0", placeholder: "0=新" },
+              { tag: "39", label: "订单状态", value: "0", placeholder: "0=新" },
+              { tag: "14", label: "累计数量", value: "0", placeholder: "已执行数量" },
+              { tag: "6", label: "平均价格", value: "0", placeholder: "平均执行价格" }
+            ],
+            "BE": [
+              { tag: "70", label: "分配ID", value: "", placeholder: "唯一分配ID" },
+              { tag: "71", label: "分配类型", value: "2", placeholder: "分配类型" },
+              { tag: "453", label: "接收方数量", value: "1", placeholder: "接收方数量" },
+              { tag: "54", label: "方向", value: "1", placeholder: "1=买, 2=卖" },
+              { tag: "38", label: "分配数量", value: "100", placeholder: "分配数量" }
+            ]
+          },
+          messageHistory: [],
+          activeTab: 'all',
+          metrics: {
+            messagesSent: 0,
+            messagesReceived: 0,
+            avgResponse: 0,
+            successRate: 100
+          }
+        };
+      },
+      computed: {
+        currentConfig() {
+          return this.connections[this.currentConnection];
+        },
+        connectionStatus() {
+          if (this.isConnected) return "connected";
+          if (this.isConnecting) return "connecting";
+          return "";
+        },
+        statusText() {
+          if (this.isConnected) return "已连接";
+          if (this.isConnecting) return "连接中...";
+          return "未连接";
+        },
+        currentFields() {
+          return this.messageFields[this.currentMessageType] || [];
+        },
+        filteredHistory() {
+          if (this.activeTab === 'sent') {
+            return this.messageHistory.filter(msg => msg.direction === 'sent');
+          } else if (this.activeTab === 'received') {
+            return this.messageHistory.filter(msg => msg.direction === 'received');
+          }
+          return this.messageHistory;
+        }
+      },
+      methods: {
+        selectConnection(index) {
+          this.currentConnection = index;
+        },
+        showConnectionDialog() {
+          this.newConnection = { name: "", host: "", port: "" };
+          this.connectionDialogVisible = true;
+        },
+        addConnection() {
+          if (this.newConnection.name && this.newConnection.host && this.newConnection.port) {
+            this.connections.push({
+              name: this.newConnection.name,
+              host: this.newConnection.host,
+              port: this.newConnection.port,
+              senderCompID: "SENDER" + Math.floor(Math.random() * 100),
+              targetCompID: "TARGET" + Math.floor(Math.random() * 100),
+              username: "user" + Math.floor(Math.random() * 100),
+              password: "pass" + Math.floor(Math.random() * 1000)
+            });
+            this.connectionDialogVisible = false;
+          }
+        },
+        saveConnection() {
+          // 在实际应用中，这里应该保存到本地存储或后端
+          this.$message.success('连接配置已保存');
+        },
+        deleteConnection() {
+          if (this.connections.length > 1) {
+            this.$confirm('确定要删除此连接配置吗?', '提示', {
+              confirmButtonText: '确定',
+              cancelButtonText: '取消',
+              type: 'warning'
+            }).then(() => {
+              this.connections.splice(this.currentConnection, 1);
+              this.currentConnection = Math.max(0, this.currentConnection - 1);
+              this.$message.success('配置已删除');
+            });
+          } else {
+            this.$message.warning('不能删除最后一个配置');
+          }
+        },
+        connect() {
+          if (!this.currentConfig) return;
+          
+          this.isConnecting = true;
+          
+          // 模拟连接过程
+          setTimeout(() => {
+            this.isConnecting = false;
+            this.isConnected = true;
+            
+            // 添加登录消息到历史记录
+            const loginMsg = {
+              direction: 'sent',
+              type: 'A',
+              message: `8=FIX.4.4|9=70|35=A|49=${this.currentConfig.senderCompID}|56=${this.currentConfig.targetCompID}|34=1|52=${this.getCurrentDateTime()}|98=0|108=30|553=${this.currentConfig.username}|554=${this.currentConfig.password}|10=000|`,
+              timestamp: this.getCurrentTime()
+            };
+            
+            this.messageHistory.unshift(loginMsg);
+            this.metrics.messagesSent++;
+            
+            // 模拟登录响应
+            setTimeout(() => {
+              const loginResponse = {
+                direction: 'received',
+                type: 'A',
+                message: `8=FIX.4.4|9=60|35=A|49=${this.currentConfig.targetCompID}|56=${this.currentConfig.senderCompID}|34=1|52=${this.getCurrentDateTime()}|98=0|108=30|10=000|`,
+                timestamp: this.getCurrentTime()
+              };
+              
+              this.messageHistory.unshift(loginResponse);
+              this.metrics.messagesReceived++;
+            }, 500);
+            
+            this.$message.success('连接成功');
+          }, 1500);
+        },
+        disconnect() {
+          this.isConnected = false;
+          
+          // 添加登出消息
+          const logoutMsg = {
+            direction: 'sent',
+            type: '5',
+            message: `8=FIX.4.4|9=50|35=5|49=${this.currentConfig.senderCompID}|56=${this.currentConfig.targetCompID}|34=2|52=${this.getCurrentDateTime()}|10=000|`,
+            timestamp: this.getCurrentTime()
+          };
+          
+          this.messageHistory.unshift(logoutMsg);
+          this.metrics.messagesSent++;
+          
+          this.$message.info('已断开连接');
+        },
+        selectMessageType(type) {
+          this.currentMessageType = type;
+        },
+        sendMessage() {
+          if (!this.isConnected) {
+            this.$message.warning('请先连接到FIX服务器');
+            return;
+          }
+          
+          // 构建FIX消息
+          let message = `8=FIX.4.4|9=100|35=${this.currentMessageType}|`;
+          message += `49=${this.currentConfig.senderCompID}|`;
+          message += `56=${this.currentConfig.targetCompID}|`;
+          message += `34=${this.metrics.messagesSent + 2}|`; // 消息序号
+          message += `52=${this.getCurrentDateTime()}|`;
+          
+          // 添加消息特定字段
+          this.currentFields.forEach(field => {
+            if (field.value) {
+              message += `${field.tag}=${field.value}|`;
+            }
+          });
+          
+          // 添加校验和
+          message += `10=000|`;
+          
+          const sentMsg = {
+            direction: 'sent',
+            type: this.currentMessageType,
+            message: message,
+            timestamp: this.getCurrentTime()
+          };
+          
+          this.messageHistory.unshift(sentMsg);
+          this.metrics.messagesSent++;
+          
+          // 模拟响应
+          if (this.currentMessageType === 'D') {
+            setTimeout(() => {
+              const execReport = {
+                direction: 'received',
+                type: '8',
+                message: `8=FIX.4.4|9=150|35=8|49=${this.currentConfig.targetCompID}|56=${this.currentConfig.senderCompID}|34=${this.metrics.messagesReceived + 2}|52=${this.getCurrentDateTime()}|37=ORDER${Math.floor(Math.random() * 10000)}|11=${this.findFieldValue('11')}|150=0|39=0|55=${this.findFieldValue('55')}|54=${this.findFieldValue('54')}|38=${this.findFieldValue('38')}|40=${this.findFieldValue('40')}|44=${this.findFieldValue('44')}|59=${this.findFieldValue('59')}|10=000|`,
+                timestamp: this.getCurrentTime()
+              };
+              
+              this.messageHistory.unshift(execReport);
+              this.metrics.messagesReceived++;
+            }, 800);
+          }
+          
+          this.$message.success('消息已发送');
+        },
+        findFieldValue(tag) {
+          const field = this.currentFields.find(f => f.tag === tag);
+          return field ? field.value : '';
+        },
+        clearHistory() {
+          this.messageHistory = [];
+          this.metrics = {
+            messagesSent: 0,
+            messagesReceived: 0,
+            avgResponse: 0,
+            successRate: 100
+          };
+        },
+        formatFixMessage(msg) {
+          // 在实际应用中，这里可以更美观地格式化FIX消息
+          return msg.replace(/\|/g, '\n');
+        },
+        getCurrentTime() {
+          const now = new Date();
+          return now.toLocaleTimeString();
+        },
+        getCurrentDateTime() {
+          const now = new Date();
+          const year = now.getUTCFullYear();
+          const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(now.getUTCDate()).padStart(2, '0');
+          const hours = String(now.getUTCHours()).padStart(2, '0');
+          const minutes = String(now.getUTCMinutes()).padStart(2, '0');
+          const seconds = String(now.getUTCSeconds()).padStart(2, '0');
+          return `${year}${month}${day}-${hours}:${minutes}:${seconds}`;
+        }
+      },
+      mounted() {
+        // 初始化当前配置
+        if (this.currentConfig) {
+          const loginFields = this.messageFields['A'];
+          if (loginFields) {
+            const usernameField = loginFields.find(f => f.tag === '553');
+            const passwordField = loginFields.find(f => f.tag === '554');
+            if (usernameField) usernameField.value = this.currentConfig.username;
+            if (passwordField) passwordField.value = this.currentConfig.password;
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
