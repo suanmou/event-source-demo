@@ -1,0 +1,536 @@
+package com.example.ipmanage.model;
+
+import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Version;
+import org.springframework.data.mongodb.core.mapping.Document;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Data
+@Document(collection = "users")
+public class User {
+    @Id
+    private String id;
+    private String name;
+    private String email;
+    private String role;
+    
+    private List<IpEntry> ipWhitelist = new ArrayList<>();
+    
+    @Version
+    private Integer version;
+}
+
+package com.example.ipmanage.model;
+
+import lombok.Data;
+import java.util.Date;
+
+@Data
+public class IpEntry {
+    private String id;
+    private String ip;
+    private String remark;
+    private Date createdAt;
+    private Date updatedAt;
+}
+
+package com.example.ipmanage.model;
+
+import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+import java.util.Date;
+
+@Data
+@Document(collection = "operation_logs")
+public class OperationLog {
+    @Id
+    private String id;
+    private String userId;
+    private String operationType; // CREATE, UPDATE, ROLLBACK
+    private Integer version;
+    private Date timestamp;
+    private String mongoStatus; // SUCCESS, FAILED
+    private String apiStatus;   // SUCCESS, FAILED, PENDING
+    private IpChanges detail;
+    private String operator;
+}
+
+@Data
+class IpChanges {
+    private List<String> added = new ArrayList<>();
+    private List<String> removed = new ArrayList<>();
+}
+
+package com.example.ipmanage.model;
+
+import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+import java.util.Date;
+
+@Data
+@Document(collection = "external_system_logs")
+public class ExternalSystemLog {
+    @Id
+    private String id;
+    private String operationLogId;
+    private String systemName;
+    private Date requestTime;
+    private Date responseTime;
+    private String status; // SUCCESS, FAILED
+    private String response;
+}
+
+
+package com.example.ipmanage.repository;
+
+import com.example.ipmanage.model.User;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public interface UserRepository extends MongoRepository<User, String> {
+}
+
+package com.example.ipmanage.repository;
+
+import com.example.ipmanage.model.OperationLog;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.stereotype.Repository;
+import java.util.List;
+
+@Repository
+public interface OperationLogRepository extends MongoRepository<OperationLog, String> {
+    List<OperationLog> findByUserIdOrderByTimestampDesc(String userId);
+    Page<OperationLog> findByUserId(String userId, Pageable pageable);
+}
+
+package com.example.ipmanage.repository;
+
+import com.example.ipmanage.model.ExternalSystemLog;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public interface ExternalSystemLogRepository extends MongoRepository<ExternalSystemLog, String> {
+}
+
+package com.example.ipmanage.service;
+
+import com.example.ipmanage.model.User;
+import com.example.ipmanage.model.OperationLog;
+import java.util.List;
+
+public interface UserService {
+    User createUser(User user);
+    User updateUser(String userId, User user);
+    User getUserById(String userId);
+    User updateIpWhitelist(String userId, List<IpEntry> ipList);
+    OperationLog rollbackToVersion(String operationLogId);
+}
+
+package com.example.ipmanage.service.impl;
+
+import com.example.ipmanage.exception.VersionConflictException;
+import com.example.ipmanage.model.*;
+import com.example.ipmanage.repository.UserRepository;
+import com.example.ipmanage.repository.OperationLogRepository;
+import com.example.ipmanage.service.AsyncTaskService;
+import com.example.ipmanage.service.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Service
+public class UserServiceImpl implements UserService {
+
+    @Autowired
+    private UserRepository userRepository;
+    
+    @Autowired
+    private OperationLogRepository operationLogRepository;
+    
+    @Autowired
+    private AsyncTaskService asyncTaskService;
+    
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
+    @Override
+    public User createUser(User user) {
+        user.setIpWhitelist(Optional.ofNullable(user.getIpWhitelist()).orElse(new ArrayList<>()));
+        user.setVersion(1);
+        return userRepository.save(user);
+    }
+
+    @Override
+    public User updateUser(String userId, User user) {
+        User existingUser = getUserById(userId);
+        existingUser.setName(user.getName());
+        existingUser.setEmail(user.getEmail());
+        existingUser.setRole(user.getRole());
+        return userRepository.save(existingUser);
+    }
+
+    @Override
+    public User getUserById(String userId) {
+        return userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+    }
+
+    @Override
+    @Transactional
+    public User updateIpWhitelist(String userId, List<IpEntry> newIpList) {
+        User user = getUserById(userId);
+        
+        // 计算IP变更
+        IpChanges ipChanges = calculateIpChanges(user.getIpWhitelist(), newIpList);
+        
+        // 创建操作日志（初始状态）
+        OperationLog operationLog = new OperationLog();
+        operationLog.setUserId(userId);
+        operationLog.setOperationType("UPDATE");
+        operationLog.setVersion(user.getVersion() + 1);
+        operationLog.setTimestamp(new Date());
+        operationLog.setMongoStatus("PENDING");
+        operationLog.setApiStatus("PENDING");
+        operationLog.setDetail(ipChanges);
+        operationLog.setOperator("admin"); // 实际应用中从安全上下文获取
+        
+        // 使用乐观锁更新用户
+        Query query = new Query(Criteria.where("id").is(userId).and("version").is(user.getVersion()));
+        Update update = new Update()
+                .set("ipWhitelist", newIpList)
+                .inc("version", 1);
+        
+        if (mongoTemplate.updateFirst(query, update, User.class).getModifiedCount() == 0) {
+            throw new VersionConflictException("User data has been modified by another operation");
+        }
+        
+        // 更新后的用户
+        User updatedUser = getUserById(userId);
+        
+        // 保存操作日志（MongoDB部分成功）
+        operationLog.setMongoStatus("SUCCESS");
+        OperationLog savedLog = operationLogRepository.save(operationLog);
+        
+        // 异步调用外部系统
+        asyncTaskService.applyIpChangesAsync(savedLog.getId(), updatedUser);
+        
+        return updatedUser;
+    }
+    
+    private IpChanges calculateIpChanges(List<IpEntry> oldList, List<IpEntry> newList) {
+        IpChanges changes = new IpChanges();
+        
+        Set<String> oldIps = oldList.stream().map(IpEntry::getIp).collect(Collectors.toSet());
+        Set<String> newIps = newList.stream().map(IpEntry::getIp).collect(Collectors.toSet());
+        
+        // 新增的IP
+        changes.setAdded(newList.stream()
+                .filter(ip -> !oldIps.contains(ip.getIp()))
+                .map(IpEntry::getIp)
+                .collect(Collectors.toList()));
+        
+        // 移除的IP
+        changes.setRemoved(oldList.stream()
+                .filter(ip -> !newIps.contains(ip.getIp()))
+                .map(IpEntry::getIp)
+                .collect(Collectors.toList()));
+        
+        return changes;
+    }
+
+    @Override
+    @Transactional
+    public OperationLog rollbackToVersion(String operationLogId) {
+        OperationLog targetLog = operationLogRepository.findById(operationLogId)
+                .orElseThrow(() -> new RuntimeException("Operation log not found"));
+        
+        // 获取要回滚的用户
+        User user = getUserById(targetLog.getUserId());
+        
+        // 创建回滚操作日志
+        OperationLog rollbackLog = new OperationLog();
+        rollbackLog.setUserId(user.getId());
+        rollbackLog.setOperationType("ROLLBACK");
+        rollbackLog.setVersion(user.getVersion() + 1);
+        rollbackLog.setTimestamp(new Date());
+        rollbackLog.setMongoStatus("PENDING");
+        rollbackLog.setApiStatus("PENDING");
+        
+        // 交换新增和移除的IP（回滚操作）
+        IpChanges rollbackChanges = new IpChanges();
+        rollbackChanges.setAdded(targetLog.getDetail().getRemoved());
+        rollbackChanges.setRemoved(targetLog.getDetail().getAdded());
+        rollbackLog.setDetail(rollbackChanges);
+        rollbackLog.setOperator("admin");
+        
+        // 使用乐观锁更新用户
+        Query query = new Query(Criteria.where("id").is(user.getId()).and("version").is(user.getVersion()));
+        Update update = new Update()
+                .set("ipWhitelist", getIpListByLog(targetLog))
+                .inc("version", 1);
+        
+        if (mongoTemplate.updateFirst(query, update, User.class).getModifiedCount() == 0) {
+            throw new VersionConflictException("User data has been modified by another operation");
+        }
+        
+        // 更新后的用户
+        User updatedUser = getUserById(user.getId());
+        
+        // 保存回滚操作日志
+        rollbackLog.setMongoStatus("SUCCESS");
+        OperationLog savedRollbackLog = operationLogRepository.save(rollbackLog);
+        
+        // 异步调用外部系统
+        asyncTaskService.applyIpChangesAsync(savedRollbackLog.getId(), updatedUser);
+        
+        return savedRollbackLog;
+    }
+    
+    private List<IpEntry> getIpListByLog(OperationLog log) {
+        // 实际应用中需要从历史记录重建IP列表
+        // 简化处理：返回当前用户的IP列表
+        return getUserById(log.getUserId()).getIpWhitelist();
+    }
+}
+
+
+package com.example.ipmanage.service;
+
+import com.example.ipmanage.model.ExternalSystemLog;
+import com.example.ipmanage.model.OperationLog;
+import com.example.ipmanage.model.User;
+import com.example.ipmanage.repository.ExternalSystemLogRepository;
+import com.example.ipmanage.repository.OperationLogRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import java.util.Date;
+
+@Service
+public class AsyncTaskService {
+
+    @Autowired
+    private OperationLogRepository operationLogRepository;
+    
+    @Autowired
+    private ExternalSystemLogRepository externalSystemLogRepository;
+    
+    @Autowired
+    private ExternalSystemService externalSystemService;
+
+    @Async
+    public void applyIpChangesAsync(String operationLogId, User user) {
+        OperationLog operationLog = operationLogRepository.findById(operationLogId)
+                .orElseThrow(() -> new RuntimeException("Operation log not found"));
+        
+        try {
+            // 调用防火墙系统
+            ExternalSystemLog firewallLog = callExternalSystem("Firewall", operationLogId, user);
+            
+            // 调用审计系统
+            ExternalSystemLog auditLog = callExternalSystem("Audit", operationLogId, user);
+            
+            // 更新操作日志状态
+            if (firewallLog.getStatus().equals("SUCCESS") && 
+                auditLog.getStatus().equals("SUCCESS")) {
+                operationLog.setApiStatus("SUCCESS");
+            } else {
+                operationLog.setApiStatus("FAILED");
+            }
+        } catch (Exception e) {
+            operationLog.setApiStatus("FAILED");
+        }
+        
+        operationLogRepository.save(operationLog);
+    }
+    
+    private ExternalSystemLog callExternalSystem(String systemName, String operationLogId, User user) {
+        ExternalSystemLog systemLog = new ExternalSystemLog();
+        systemLog.setOperationLogId(operationLogId);
+        systemLog.setSystemName(systemName);
+        systemLog.setRequestTime(new Date());
+        
+        try {
+            String response;
+            if ("Firewall".equals(systemName)) {
+                response = externalSystemService.applyFirewallRules(user.getId(), user.getIpWhitelist());
+            } else {
+                response = externalSystemService.logAuditEvent(user.getId(), operationLogId);
+            }
+            
+            systemLog.setResponseTime(new Date());
+            systemLog.setStatus("SUCCESS");
+            systemLog.setResponse(response);
+        } catch (Exception e) {
+            systemLog.setResponseTime(new Date());
+            systemLog.setStatus("FAILED");
+            systemLog.setResponse(e.getMessage());
+        }
+        
+        return externalSystemLogRepository.save(systemLog);
+    }
+}
+
+
+package com.example.ipmanage.service;
+
+import com.example.ipmanage.model.IpEntry;
+import org.springframework.stereotype.Service;
+import java.util.List;
+import java.util.Random;
+
+@Service
+public class ExternalSystemService {
+
+    public String applyFirewallRules(String userId, List<IpEntry> ipList) {
+        // 模拟调用防火墙系统API
+        try {
+            Thread.sleep(500); // 模拟网络延迟
+            
+            // 模拟80%成功概率
+            if (new Random().nextDouble() < 0.8) {
+                return "防火墙规则更新成功";
+            } else {
+                throw new RuntimeException("防火墙更新超时");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("防火墙调用中断");
+        }
+    }
+    
+    public String logAuditEvent(String userId, String operationId) {
+        // 模拟调用审计系统API
+        try {
+            Thread.sleep(300); // 模拟网络延迟
+            return "审计事件记录成功";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("审计系统调用中断");
+        }
+    }
+}
+
+package com.example.ipmanage.controller;
+
+import com.example.ipmanage.model.OperationLog;
+import com.example.ipmanage.model.User;
+import com.example.ipmanage.service.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/users")
+public class UserController {
+
+    @Autowired
+    private UserService userService;
+
+    @PostMapping
+    public ResponseEntity<User> createUser(@RequestBody User user) {
+        return ResponseEntity.ok(userService.createUser(user));
+    }
+
+    @GetMapping("/{userId}")
+    public ResponseEntity<User> getUser(@PathVariable String userId) {
+        return ResponseEntity.ok(userService.getUserById(userId));
+    }
+
+    @PutMapping("/{userId}")
+    public ResponseEntity<User> updateUser(
+            @PathVariable String userId, 
+            @RequestBody User user) {
+        return ResponseEntity.ok(userService.updateUser(userId, user));
+    }
+
+    @PutMapping("/{userId}/ip-whitelist")
+    public ResponseEntity<User> updateIpWhitelist(
+            @PathVariable String userId, 
+            @RequestBody List<IpEntry> ipList) {
+        return ResponseEntity.ok(userService.updateIpWhitelist(userId, ipList));
+    }
+
+    @PostMapping("/rollback")
+    public ResponseEntity<OperationLog> rollbackToVersion(
+            @RequestParam String operationLogId) {
+        return ResponseEntity.ok(userService.rollbackToVersion(operationLogId));
+    }
+}
+
+package com.example.ipmanage.controller;
+
+import com.example.ipmanage.model.OperationLog;
+import com.example.ipmanage.repository.OperationLogRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/operations")
+public class OperationLogController {
+
+    @Autowired
+    private OperationLogRepository operationLogRepository;
+
+    @GetMapping("/user/{userId}")
+    public ResponseEntity<Page<OperationLog>> getUserOperations(
+            @PathVariable String userId,
+            Pageable pageable) {
+        return ResponseEntity.ok(operationLogRepository.findByUserId(userId, pageable));
+    }
+
+    @PostMapping("/{operationId}/retry")
+    public ResponseEntity<String> retryOperation(@PathVariable String operationId) {
+        // 实际实现需要重新触发异步任务
+        return ResponseEntity.ok("重试操作已提交");
+    }
+}
+
+package com.example.ipmanage.exception;
+
+public class VersionConflictException extends RuntimeException {
+    public VersionConflictException(String message) {
+        super(message);
+    }
+}
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(VersionConflictException.class)
+    public ResponseEntity<Map<String, String>> handleVersionConflict(VersionConflictException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(Map.of("error", "version_conflict", "message", ex.getMessage()));
+    }
+}
+
+# MongoDB配置
+spring.data.mongodb.uri=mongodb://localhost:27017/ipmanage
+
+# 服务器端口
+server.port=8080
+
+# 异步任务配置
+spring.task.execution.pool.core-size=5
+spring.task.execution.pool.max-size=20
+spring.task.execution.pool.queue-capacity=100

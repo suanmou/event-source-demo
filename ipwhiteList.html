@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用户IP白名单管理系统</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  <style>
+    :root {
+      --primary-color: #409EFF;
+      --success-color: #67C23A;
+      --warning-color: #E6A23C;
+      --danger-color: #F56C6C;
+      --info-color: #909399;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", Arial, sans-serif;
+    }
+    
+    body {
+      background-color: #f5f7fa;
+      color: #333;
+      line-height: 1.5;
+    }
+    
+    .app-container {
+      max-width: 1400px;
+      margin: 20px auto;
+      padding: 20px;
+    }
+    
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid #ebeef5;
+    }
+    
+    .header h1 {
+      color: #303133;
+      font-weight: 500;
+    }
+    
+    .card-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    
+    @media (max-width: 992px) {
+      .card-container {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    .card {
+      background: #fff;
+      border-radius: 4px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      padding: 20px;
+    }
+    
+    .card-title {
+      font-size: 18px;
+      color: #303133;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+    }
+    
+    .card-title i {
+      margin-right: 8px;
+      color: var(--primary-color);
+    }
+    
+    .ip-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 15px;
+    }
+    
+    .ip-table th {
+      background-color: #f8f8f9;
+      text-align: left;
+      padding: 12px 10px;
+      font-weight: 500;
+      color: #606266;
+    }
+    
+    .ip-table td {
+      padding: 12px 10px;
+      border-bottom: 1px solid #ebeef5;
+    }
+    
+    .ip-table tr:hover td {
+      background-color: #f5f7fa;
+    }
+    
+    .operation-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+    }
+    
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    .status-pending {
+      background-color: #ecf5ff;
+      color: var(--primary-color);
+    }
+    
+    .status-success {
+      background-color: #f0f9eb;
+      color: var(--success-color);
+    }
+    
+    .status-failed {
+      background-color: #fef0f0;
+      color: var(--danger-color);
+    }
+    
+    .status-processing {
+      background-color: #fdf6ec;
+      color: var(--warning-color);
+    }
+    
+    .version-tag {
+      display: inline-block;
+      padding: 0 6px;
+      height: 24px;
+      line-height: 24px;
+      font-size: 12px;
+      color: var(--primary-color);
+      border: 1px solid #d9ecff;
+      border-radius: 4px;
+      background-color: #ecf5ff;
+      margin-left: 8px;
+    }
+    
+    .history-item {
+      padding: 12px 0;
+      border-bottom: 1px solid #ebeef5;
+    }
+    
+    .history-item:last-child {
+      border-bottom: none;
+    }
+    
+    .history-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    
+    .history-version {
+      font-weight: 500;
+      color: #303133;
+    }
+    
+    .history-time {
+      color: #909399;
+      font-size: 13px;
+    }
+    
+    .history-status {
+      display: flex;
+      gap: 15px;
+      margin-top: 6px;
+    }
+    
+    .history-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 10px;
+    }
+    
+    .user-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background-color: #409EFF;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: bold;
+      margin-right: 10px;
+    }
+    
+    .user-info {
+      display: flex;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    
+    .user-details {
+      flex: 1;
+    }
+    
+    .user-name {
+      font-size: 18px;
+      font-weight: 500;
+      margin-bottom: 5px;
+    }
+    
+    .user-email {
+      color: #606266;
+      font-size: 14px;
+    }
+    
+    .save-section {
+      margin-top: 25px;
+      padding-top: 20px;
+      border-top: 1px solid #ebeef5;
+      display: flex;
+      align-items: center;
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      margin-left: 20px;
+    }
+    
+    .status-text {
+      margin-left: 8px;
+      font-size: 14px;
+    }
+    
+    .divider {
+      height: 1px;
+      background-color: #ebeef5;
+      margin: 20px 0;
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: #909399;
+    }
+    
+    .empty-state i {
+      font-size: 60px;
+      margin-bottom: 15px;
+      color: #dcdfe6;
+    }
+    
+    .empty-state p {
+      margin-top: 10px;
+    }
+    
+    .el-tag {
+      margin-right: 5px;
+      margin-bottom: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="app-container">
+      <div class="header">
+        <h1><i class="el-icon-s-management"></i> 用户IP白名单管理系统</h1>
+        <div>
+          <el-button type="primary" icon="el-icon-plus" @click="showUserDialog">新增用户</el-button>
+          <el-button icon="el-icon-refresh">刷新</el-button>
+        </div>
+      </div>
+      
+      <div class="user-info">
+        <div class="user-avatar">{{ currentUser.name.charAt(0).toUpperCase() }}</div>
+        <div class="user-details">
+          <div class="user-name">{{ currentUser.name }} 
+            <span class="version-tag">版本 v{{ currentUser.version }}</span>
+          </div>
+          <div class="user-email">{{ currentUser.email }}</div>
+        </div>
+        <el-button type="primary" plain @click="editUser">编辑用户</el-button>
+      </div>
+      
+      <div class="card-container">
+        <div class="card">
+          <div class="card-title">
+            <i class="el-icon-s-claim"></i> IP白名单管理
+            <el-tooltip content="支持IPv4、IPv6和CIDR格式" placement="top">
+              <i class="el-icon-info" style="margin-left:8px;color:#909399"></i>
+            </el-tooltip>
+          </div>
+          
+          <div v-if="ipWhitelist.length === 0" class="empty-state">
+            <i class="el-icon-document-remove"></i>
+            <p>尚未添加任何IP地址</p>
+            <el-button type="primary" @click="addIp">添加IP地址</el-button>
+          </div>
+          
+          <table v-else class="ip-table">
+            <thead>
+              <tr>
+                <th style="width:55%">IP地址</th>
+                <th>备注</th>
+                <th style="width:120px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(ip, index) in ipWhitelist" :key="ip.id">
+                <td>
+                  <el-input 
+                    v-model="ip.ip" 
+                    placeholder="输入IP地址" 
+                    size="small" 
+                    @blur="validateIp(ip)"
+                  ></el-input>
+                  <div v-if="ip.error" style="color:#F56C6C;font-size:12px;margin-top:5px">{{ ip.error }}</div>
+                </td>
+                <td>
+                  <el-input 
+                    v-model="ip.remark" 
+                    placeholder="备注信息" 
+                    size="small"
+                  ></el-input>
+                </td>
+                <td>
+                  <el-button 
+                    size="mini" 
+                    type="danger" 
+                    icon="el-icon-delete"
+                    @click="removeIp(index)"
+                  ></el-button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          
+          <div v-if="ipWhitelist.length > 0" class="operation-buttons">
+            <el-button type="primary" icon="el-icon-plus" @click="addIp">添加IP</el-button>
+            <el-button icon="el-icon-upload2" @click="importDialogVisible = true">批量导入</el-button>
+            <el-button type="danger" icon="el-icon-delete" @click="clearIps">清空列表</el-button>
+          </div>
+          
+          <div class="save-section">
+            <el-button 
+              type="primary" 
+              :loading="saving"
+              @click="saveChanges"
+            >
+              {{ saving ? '保存中...' : '保存变更' }}
+            </el-button>
+            
+            <div class="status-indicator" v-if="saveStatus">
+              <i :class="statusIcon" :style="{color: statusColor}"></i>
+              <span class="status-text" :style="{color: statusColor}">{{ saveStatus }}</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-title">
+            <i class="el-icon-notebook-2"></i> 操作历史记录
+          </div>
+          
+          <div v-if="operationHistory.length === 0" class="empty-state">
+            <i class="el-icon-notebook-1"></i>
+            <p>暂无操作记录</p>
+          </div>
+          
+          <div v-else>
+            <div v-for="(operation, index) in operationHistory" :key="operation.id" class="history-item">
+              <div class="history-header">
+                <div class="history-version">
+                  版本 v{{ operation.version }}
+                  <el-tag size="mini" :type="operationTypeTag(operation.type)">
+                    {{ operationTypeText(operation.type) }}
+                  </el-tag>
+                </div>
+                <div class="history-time">{{ operation.timestamp }}</div>
+              </div>
+              
+              <div v-if="operation.detail" style="margin-top:8px">
+                <div v-if="operation.detail.added.length > 0">
+                  添加IP: 
+                  <el-tag 
+                    v-for="ip in operation.detail.added" 
+                    :key="ip" 
+                    size="mini" 
+                    type="success"
+                  >
+                    {{ ip }}
+                  </el-tag>
+                </div>
+                <div v-if="operation.detail.removed.length > 0" style="margin-top:6px">
+                  移除IP: 
+                  <el-tag 
+                    v-for="ip in operation.detail.removed" 
+                    :key="ip" 
+                    size="mini" 
+                    type="danger"
+                  >
+                    {{ ip }}
+                  </el-tag>
+                </div>
+              </div>
+              
+              <div class="history-status">
+                <span class="status-badge status-success">
+                  <i class="el-icon-s-data"></i> MongoDB: {{ operation.mongoStatus }}
+                </span>
+                <span :class="['status-badge', apiStatusClass(operation.apiStatus)]">
+                  <i class="el-icon-connection"></i> 外部接口: {{ operation.apiStatus }}
+                </span>
+              </div>
+              
+              <div class="history-actions">
+                <el-button 
+                  size="mini" 
+                  type="primary" 
+                  plain 
+                  @click="rollbackToVersion(operation)"
+                  :disabled="operation.apiStatus === 'PENDING'"
+                >
+                  回滚到此版本
+                </el-button>
+                <el-button 
+                  size="mini" 
+                  v-if="operation.apiStatus !== 'SUCCESS'" 
+                  @click="retryOperation(operation)"
+                >
+                  重试生效
+                </el-button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 用户编辑对话框 -->
+    <el-dialog :title="userDialogTitle" :visible.sync="userDialogVisible" width="500px">
+      <el-form :model="userForm" label-width="80px">
+        <el-form-item label="用户名" required>
+          <el-input v-model="userForm.name" placeholder="请输入用户名"></el-input>
+        </el-form-item>
+        <el-form-item label="邮箱" required>
+          <el-input v-model="userForm.email" placeholder="请输入邮箱"></el-input>
+        </el-form-item>
+        <el-form-item label="角色">
+          <el-select v-model="userForm.role" placeholder="请选择角色">
+            <el-option label="管理员" value="admin"></el-option>
+            <el-option label="普通用户" value="user"></el-option>
+            <el-option label="审计员" value="auditor"></el-option>
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <span slot="footer" class="dialog-footer">
+        <el-button @click="userDialogVisible = false">取 消</el-button>
+        <el-button type="primary" @click="saveUser">确 定</el-button>
+      </span>
+    </el-dialog>
+
+    <!-- IP导入对话框 -->
+    <el-dialog title="批量导入IP" :visible.sync="importDialogVisible" width="500px">
+      <el-alert title="格式说明" type="info" style="margin-bottom:15px">
+        <p>每行输入一个IP地址，格式：IP地址 [备注]</p>
+        <p>示例：</p>
+        <p>192.168.1.1 办公室主机</p>
+        <p>10.0.0.1/24 内部网络</p>
+      </el-alert>
+      <el-input
+        type="textarea"
+        :rows="8"
+        placeholder="请输入IP列表，每行一个"
+        v-model="importIpsText">
+      </el-input>
+      <span slot="footer" class="dialog-footer">
+        <el-button @click="importDialogVisible = false">取 消</el-button>
+        <el-button type="primary" @click="importIps">导 入</el-button>
+      </span>
+    </el-dialog>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          // 当前用户数据
+          currentUser: {
+            id: 'user001',
+            name: '张三',
+            email: 'zhang.san@example.com',
+            role: 'admin',
+            version: 3
+          },
+          
+          // IP白名单列表
+          ipWhitelist: [
+            { id: 'ip1', ip: '192.168.1.1', remark: '办公室主机' },
+            { id: 'ip2', ip: '10.0.0.1/24', remark: '内部网络' },
+            { id: 'ip3', ip: '202.120.1.1', remark: '实验室主机' },
+            { id: 'ip4', ip: '172.16.0.5', remark: 'VPN接入' }
+          ],
+          
+          // 操作历史记录
+          operationHistory: [
+            {
+              id: 'op3',
+              version: 3,
+              type: 'UPDATE',
+              timestamp: '2023-08-06 14:30:05',
+              mongoStatus: 'SUCCESS',
+              apiStatus: 'FAILED',
+              detail: {
+                added: ['202.120.1.1'],
+                removed: ['192.168.1.2']
+              }
+            },
+            {
+              id: 'op2',
+              version: 2,
+              type: 'UPDATE',
+              timestamp: '2023-08-06 14:28:12',
+              mongoStatus: 'SUCCESS',
+              apiStatus: 'SUCCESS',
+              detail: {
+                added: ['172.16.0.5'],
+                removed: []
+              }
+            },
+            {
+              id: 'op1',
+              version: 1,
+              type: 'CREATE',
+              timestamp: '2023-08-06 10:15:33',
+              mongoStatus: 'SUCCESS',
+              apiStatus: 'SUCCESS',
+              detail: {
+                added: ['192.168.1.1', '10.0.0.1/24', '192.168.1.2'],
+                removed: []
+              }
+            }
+          ],
+          
+          // 保存状态
+          saving: false,
+          saveStatus: '',
+          
+          // 对话框控制
+          userDialogVisible: false,
+          importDialogVisible: false,
+          
+          // 用户表单数据
+          userForm: {
+            name: '',
+            email: '',
+            role: ''
+          },
+          
+          // 导入的IP文本
+          importIpsText: '',
+          
+          // 判断是新增还是编辑用户
+          isNewUser: false
+        };
+      },
+      computed: {
+        // 状态图标计算
+        statusIcon() {
+          if (this.saveStatus.includes('成功')) return 'el-icon-success';
+          if (this.saveStatus.includes('失败')) return 'el-icon-error';
+          if (this.saveStatus.includes('生效中')) return 'el-icon-loading';
+          return 'el-icon-info';
+        },
+        
+        // 状态颜色计算
+        statusColor() {
+          if (this.saveStatus.includes('成功')) return '#67C23A';
+          if (this.saveStatus.includes('失败')) return '#F56C6C';
+          if (this.saveStatus.includes('生效中')) return '#E6A23C';
+          return '#909399';
+        },
+        
+        // 用户对话框标题
+        userDialogTitle() {
+          return this.isNewUser ? '新增用户' : '编辑用户信息';
+        }
+      },
+      methods: {
+        // 添加IP
+        addIp() {
+          this.ipWhitelist.push({
+            id: 'ip' + Date.now(),
+            ip: '',
+            remark: '',
+            error: ''
+          });
+        },
+        
+        // 移除IP
+        removeIp(index) {
+          this.ipWhitelist.splice(index, 1);
+        },
+        
+        // 清空IP列表
+        clearIps() {
+          this.$confirm('确定要清空所有IP地址吗?', '提示', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            type: 'warning'
+          }).then(() => {
+            this.ipWhitelist = [];
+          });
+        },
+        
+        // 验证IP格式
+        validateIp(ipItem) {
+          const ip = ipItem.ip.trim();
+          if (!ip) {
+            ipItem.error = 'IP地址不能为空';
+            return;
+          }
+          
+          // IPv4 验证（支持CIDR）
+          const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
+          // IPv6 验证（简化版）
+          const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(\/\d{1,3})?$/;
+          
+          if (!ipv4Regex.test(ip) && !ipv6Regex.test(ip)) {
+            ipItem.error = 'IP格式不正确，请使用IPv4/IPv6格式';
+            return;
+          }
+          
+          ipItem.error = '';
+        },
+        
+        // 保存变更
+        saveChanges() {
+          // 验证所有IP
+          let hasError = false;
+          this.ipWhitelist.forEach(ip => {
+            this.validateIp(ip);
+            if (ip.error) hasError = true;
+          });
+          
+          if (hasError) {
+            this.$message.error('请修正IP格式错误后再保存');
+            return;
+          }
+          
+          // 模拟保存过程
+          this.saving = true;
+          this.saveStatus = '保存中...';
+          
+          // 模拟API请求
+          setTimeout(() => {
+            // 第一步：保存到MongoDB
+            this.saveStatus = '数据库保存成功，生效中...';
+            
+            // 第二步：调用外部接口生效
+            setTimeout(() => {
+              this.saving = false;
+              
+              // 模拟70%成功概率
+              if (Math.random() > 0.3) {
+                this.saveStatus = '保存成功，配置已生效';
+                
+                // 添加操作历史
+                this.operationHistory.unshift({
+                  id: 'op' + Date.now(),
+                  version: this.currentUser.version + 1,
+                  type: 'UPDATE',
+                  timestamp: new Date().toLocaleString(),
+                  mongoStatus: 'SUCCESS',
+                  apiStatus: 'SUCCESS',
+                  detail: {
+                    added: ['203.0.113.5'], // 这里应该是实际变更的IP
+                    removed: []
+                  }
+                });
+                
+                // 更新版本号
+                this.currentUser.version++;
+              } else {
+                this.saveStatus = '数据库保存成功，但生效失败';
+                
+                // 添加操作历史
+                this.operationHistory.unshift({
+                  id: 'op' + Date.now(),
+                  version: this.currentUser.version + 1,
+                  type: 'UPDATE',
+                  timestamp: new Date().toLocaleString(),
+                  mongoStatus: 'SUCCESS',
+                  apiStatus: 'FAILED',
+                  detail: {
+                    added: ['203.0.113.5'],
+                    removed: []
+                  }
+                });
+                
+                // 更新版本号
+                this.currentUser.version++;
+              }
+            }, 1500);
+          }, 1000);
+        },
+        
+        // 回滚到指定版本
+        rollbackToVersion(operation) {
+          this.$confirm(`确定要回滚到版本 v${operation.version} 吗?`, '回滚确认', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            type: 'warning'
+          }).then(() => {
+            // 模拟回滚操作
+            this.saveStatus = `正在回滚到版本 v${operation.version}...`;
+            
+            setTimeout(() => {
+              this.saveStatus = `已成功回滚到版本 v${operation.version}`;
+              
+              // 添加回滚操作记录
+              this.operationHistory.unshift({
+                id: 'rb' + Date.now(),
+                version: this.currentUser.version + 1,
+                type: 'ROLLBACK',
+                timestamp: new Date().toLocaleString(),
+                mongoStatus: 'SUCCESS',
+                apiStatus: 'SUCCESS',
+                detail: {
+                  added: operation.detail.removed,
+                  removed: operation.detail.added
+                }
+              });
+              
+              // 更新版本号
+              this.currentUser.version++;
+              
+              // 这里实际应该应用回滚后的IP列表
+              this.$message.success(`已成功回滚到版本 v${operation.version}`);
+            }, 1500);
+          });
+        },
+        
+        // 重试生效操作
+        retryOperation(operation) {
+          this.$confirm('重试生效此操作?', '确认', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            type: 'warning'
+          }).then(() => {
+            operation.apiStatus = 'PENDING';
+            
+            // 模拟重试操作
+            setTimeout(() => {
+              // 模拟80%成功概率
+              if (Math.random() > 0.2) {
+                operation.apiStatus = 'SUCCESS';
+                this.$message.success('操作已成功生效');
+              } else {
+                operation.apiStatus = 'FAILED';
+                this.$message.error('生效操作失败，请稍后再试');
+              }
+            }, 1000);
+          });
+        },
+        
+        // 显示用户对话框（新增）
+        showUserDialog() {
+          this.isNewUser = true;
+          this.userForm = {
+            name: '',
+            email: '',
+            role: 'user'
+          };
+          this.userDialogVisible = true;
+        },
+        
+        // 编辑用户
+        editUser() {
+          this.isNewUser = false;
+          this.userForm = { ...this.currentUser };
+          this.userDialogVisible = true;
+        },
+        
+        // 保存用户
+        saveUser() {
+          if (this.isNewUser) {
+            // 模拟新增用户
+            this.$message.success('用户创建成功');
+          } else {
+            // 更新用户信息
+            this.currentUser = { ...this.userForm };
+            this.$message.success('用户信息更新成功');
+          }
+          this.userDialogVisible = false;
+        },
+        
+        // 导入IP
+        importIps() {
+          if (!this.importIpsText.trim()) {
+            this.$message.warning('请输入要导入的IP列表');
+            return;
+          }
+          
+          const lines = this.importIpsText.trim().split('\n');
+          let addedCount = 0;
+          
+          lines.forEach(line => {
+            const parts = line.split(/\s+/);
+            if (parts[0]) {
+              this.ipWhitelist.push({
+                id: 'ip' + Date.now() + Math.random(),
+                ip: parts[0],
+                remark: parts[1] || ''
+              });
+              addedCount++;
+            }
+          });
+          
+          this.importDialogVisible = false;
+          this.importIpsText = '';
+          this.$message.success(`成功导入 ${addedCount} 个IP地址`);
+        },
+        
+        // 操作类型标签样式
+        operationTypeTag(type) {
+          switch (type) {
+            case 'CREATE': return 'success';
+            case 'UPDATE': return '';
+            case 'ROLLBACK': return 'warning';
+            default: return 'info';
+          }
+        },
+        
+        // 操作类型文本
+        operationTypeText(type) {
+          switch (type) {
+            case 'CREATE': return '创建';
+            case 'UPDATE': return '更新';
+            case 'ROLLBACK': return '回滚';
+            default: return type;
+          }
+        },
+        
+        // API状态样式
+        apiStatusClass(status) {
+          switch (status) {
+            case 'SUCCESS': return 'status-success';
+            case 'FAILED': return 'status-failed';
+            case 'PENDING': return 'status-pending';
+            default: return 'status-processing';
+          }
+        }
+      },
+      mounted() {
+        // 初始化一些数据
+      }
+    });
+  </script>
+</body>
+</html>
