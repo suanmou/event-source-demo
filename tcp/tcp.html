@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TCP连接监控系统</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    }
+    
+    body {
+      background-color: #f5f7fa;
+      color: #333;
+    }
+    
+    #app {
+      max-width: 1800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    .app-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 15px 20px;
+      background: linear-gradient(135deg, #2C6FD1 0%, #1a56db 100%);
+      color: white;
+      border-radius: 8px 8px 0 0;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    }
+    
+    .header-title {
+      font-size: 22px;
+      font-weight: 600;
+    }
+    
+    .stats-container {
+      display: flex;
+      gap: 25px;
+    }
+    
+    .stat-item {
+      text-align: center;
+      padding: 8px 15px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      min-width: 120px;
+    }
+    
+    .stat-value {
+      font-size: 20px;
+      font-weight: bold;
+      margin-top: 5px;
+    }
+    
+    .stat-label {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+    
+    .healthy { color: #4CAF50; }
+    .warning { color: #FFC107; }
+    .critical { color: #F44336; }
+    
+    .main-container {
+      display: flex;
+      margin-top: 20px;
+      gap: 20px;
+    }
+    
+    .connections-panel {
+      flex: 1;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      padding: 20px;
+    }
+    
+    .topology-panel {
+      flex: 2;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      padding: 20px;
+      min-height: 600px;
+    }
+    
+    .panel-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #2C6FD1;
+      display: flex;
+      align-items: center;
+    }
+    
+    .panel-title i {
+      margin-right: 8px;
+    }
+    
+    .search-bar {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    
+    .path-container {
+      margin-top: 30px;
+    }
+    
+    .node-path {
+      display: flex;
+      flex-direction: row; /* 改为横向排列 */
+      align-items: center; /* 垂直居中对齐 */
+      gap: 15px; /* 节点之间的水平间距 */
+      margin-top: 30px; /* 增加顶部间距 */
+      overflow-x: auto; /* 支持水平滚动 */
+      padding-bottom: 20px; /* 滚动区域底部 padding */
+    }
+    
+    .path-arrow {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: #909399;
+      white-space: nowrap; /* 防止换行 */
+    }
+    
+    /* 修改箭头图标为水平方向 - 移除旋转或设置为0度 */
+    .path-arrow i {
+      transform: rotate(0deg); /* 移除90度旋转，保持水平方向 */
+    }
+    
+    /* 调整节点卡片样式 */
+    .node-card {
+      border: 1px solid #ebeef5;
+      border-radius: 8px;
+      padding: 15px;
+      transition: all 0.3s;
+      position: relative;
+      background: #f8fafc;
+      min-width: 260px; /* 确保节点有足够宽度 */
+      flex-shrink: 0; /* 防止节点被压缩 */
+    }
+    
+    .node-card:hover {
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      transform: translateY(-2px);
+    }
+    
+    .node-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    
+    .node-title {
+      font-weight: 600;
+      font-size: 16px;
+      color: #303133;
+    }
+    
+    .node-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    
+    .status-healthy { background-color: #4CAF50; }
+    .status-warning { background-color: #FFC107; }
+    .status-critical { background-color: #F44336; animation: pulse 1.5s infinite; }
+    
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
+    
+    .node-details {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+      margin-top: 15px;
+    }
+    
+    .detail-item {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .detail-label {
+      font-size: 13px;
+      color: #909399;
+      margin-bottom: 5px;
+    }
+    
+    .detail-value {
+      font-size: 15px;
+      font-weight: 500;
+      color: #303133;
+      word-break: break-all;
+    }
+    
+    .alert-container {
+      margin-top: 15px;
+      padding: 12px;
+      border-radius: 6px;
+      background: #fff6f6;
+      border-left: 4px solid #F44336;
+    }
+    
+    .alert-title {
+      font-weight: 600;
+      color: #F44336;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .alert-content {
+      font-size: 14px;
+      color: #606266;
+    }
+    
+    .connection-row-active {
+      background-color: #f0f7ff !important;
+      border-left: 3px solid #2C6FD1;
+    }
+    
+    .no-data {
+      text-align: center;
+      padding: 40px 0;
+      color: #909399;
+    }
+    
+    .node-location {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: #909399;
+      font-size: 13px;
+      margin-top: 5px;
+    }
+    
+    .filters {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="app-header">
+      <div class="header-title">TCP连接监控系统</div>
+      <div class="stats-container">
+        <div class="stat-item">
+          <div class="stat-label">在线连接</div>
+          <div class="stat-value">128</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">异常节点</div>
+          <div class="stat-value critical">3</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">高风险通路</div>
+          <div class="stat-value warning">2</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">刷新频率</div>
+          <div class="stat-value">30秒</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="filters">
+      <el-select v-model="timeFilter" placeholder="时间范围" size="medium">
+        <el-option label="最近5分钟" value="5"></el-option>
+        <el-option label="最近15分钟" value="15"></el-option>
+        <el-option label="最近30分钟" value="30"></el-option>
+      </el-select>
+      
+      <el-select v-model="statusFilter" placeholder="状态筛选" size="medium">
+        <el-option label="全部状态" value="all"></el-option>
+        <el-option label="正常" value="healthy"></el-option>
+        <el-option label="警告" value="warning"></el-option>
+        <el-option label="异常" value="critical"></el-option>
+      </el-select>
+      
+      <el-input
+        v-model="searchQuery"
+        placeholder="搜索IP/端口"
+        size="medium"
+        clearable
+        style="width: 250px;"
+      >
+        <i slot="prefix" class="el-input__icon el-icon-search"></i>
+      </el-input>
+      
+      <el-button type="primary" size="medium">刷新数据</el-button>
+      <el-button size="medium">导出报告</el-button>
+    </div>
+
+    <div class="main-container">
+      <!-- 左侧连接列表 -->
+      <div class="connections-panel">
+        <div class="panel-title">
+          <i class="el-icon-connection"></i> TCP连接列表
+        </div>
+        
+        <el-table
+          :data="filteredConnections"
+          style="width: 100%"
+          height="600"
+          highlight-current-row
+          @current-change="handleConnectionSelect"
+          :row-class-name="tableRowClassName"
+        >
+          <el-table-column prop="status" label="状态" width="80" align="center">
+            <template slot-scope="scope">
+              <div class="status-indicator" :class="'status-' + scope.row.status"></div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="source" label="源地址" width="220">
+            <template slot-scope="scope">
+              <div>{{ scope.row.source.ip }}:{{ scope.row.source.port }}</div>
+              <div style="font-size: 12px; color: #909399;">{{ scope.row.source.location }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="destination" label="目标地址" width="220">
+            <template slot-scope="scope">
+              <div>{{ scope.row.destination.ip }}:{{ scope.row.destination.port }}</div>
+              <div style="font-size: 12px; color: #909399;">{{ scope.row.destination.location }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="duration" label="持续时间" width="110" sortable>
+            <template slot-scope="scope">
+              {{ scope.row.duration }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="health" label="健康度" width="120">
+            <template slot-scope="scope">
+              <el-progress 
+                :percentage="scope.row.health" 
+                :color="getHealthColor(scope.row.health)"
+                :show-text="false"
+                :stroke-width="12"
+              ></el-progress>
+              <div style="margin-top: 5px; text-align: center;">{{ scope.row.health }}%</div>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <!-- 右侧拓扑视图 -->
+      <div class="topology-panel">
+        <div class="panel-title">
+          <i class="el-icon-s-marketing"></i> 连接路径拓扑
+        </div>
+        
+        <div v-if="selectedConnection">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-size: 16px; font-weight: 600;">当前连接路径</div>
+              <div style="color: #606266; margin-top: 5px;">
+                {{ selectedConnection.source.ip }}:{{ selectedConnection.source.port }} 
+                → 
+                {{ selectedConnection.destination.ip }}:{{ selectedConnection.destination.port }}
+              </div>
+            </div>
+            <div>
+              <el-tag type="info" size="medium">TCP</el-tag>
+              <el-tag :type="getStatusTagType(selectedConnection.status)" size="medium">
+                {{ getStatusText(selectedConnection.status) }}
+              </el-tag>
+            </div>
+          </div>
+          
+          <div class="path-container">
+            <div class="node-path">
+              <!-- 客户端节点 -->
+              <div class="node-card">
+                <div class="node-header">
+                  <div class="node-title">客户端</div>
+                  <div class="node-status">
+                    <span class="status-indicator status-healthy"></span>
+                    <span>健康</span>
+                  </div>
+                </div>
+                <div class="node-details">
+                  <div class="detail-item">
+                    <div class="detail-label">IP地址</div>
+                    <div class="detail-value">{{ selectedConnection.source.ip }}</div>
+                  </div>
+                  <div class="detail-item">
+                    <div class="detail-label">端口</div>
+                    <div class="detail-value">{{ selectedConnection.source.port }}</div>
+                  </div>
+                  <div class="detail-item">
+                    <div class="detail-label">位置</div>
+                    <div class="detail-value">{{ selectedConnection.source.location }}</div>
+                  </div>
+                  <div class="detail-item">
+                    <div class="detail-label">协议</div>
+                    <div class="detail-value">TCP</div>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="path-arrow">
+                <i class="el-icon-right" style="font-size: 24px;"></i>
+              </div>
+              
+              <!-- 中间节点 -->
+              <div v-for="(node, index) in selectedConnection.path" :key="index" class="node-card" :class="{'critical-border': node.status === 'critical'}">
+                <div class="node-header">
+                  <div class="node-title">{{ node.role }}</div>
+                  <div class="node-status">
+                    <span class="status-indicator" :class="'status-' + node.status"></span>
+                    <span>{{ getStatusText(node.status) }}</span>
+                  </div>
+                </div>
+                <div class="node-location">
+                  <i class="el-icon-location-outline"></i>
+                  {{ node.location }}
+                </div>
+                <div class="node-details">
+                  <div class="detail-item">
+                    <div class="detail-label">IP地址</div>
+                    <div class="detail-value">{{ node.ip }}</div>
+                  </div>
+                  <div class="detail-item">
+                    <div class="detail-label">延迟</div>
+                    <div class="detail-value" :class="{'critical': node.latency > 100}">{{ node.latency }} ms</div>
+                  </div>
+                  <div class="detail-item">
+                    <div class="detail-label">丢包率</div>
+                    <div class="detail-value" :class="{'critical': node.packetLoss > 5}">{{ node.packetLoss }}%</div>
+                  </div>
+                  <div class="detail-item">
+                    <div class="detail-label">CPU负载</div>
+                    <div class="detail-value">{{ node.cpu }}%</div>
+                  </div>
+                </div>
+                
+                <!-- 异常提示 -->
+                <div v-if="node.status === 'critical'" class="alert-container">
+                  <div class="alert-title">
+                    <i class="el-icon-warning"></i>
+                    节点异常
+                  </div>
+                  <div class="alert-content">
+                    {{ node.alertMessage }}
+                  </div>
+                </div>
+              </div>
+              
+              <div class="path-arrow">
+                <i class="el-icon-right" style="font-size: 24px;"></i>
+              </div>
+              
+              <!-- 目标节点 -->
+              <div class="node-card">
+                <div class="node-header">
+                  <div class="node-title">目标服务</div>
+                  <div class="node-status">
+                    <span class="status-indicator status-healthy"></span>
+                    <span>健康</span>
+                  </div>
+                </div>
+                <div class="node-details">
+                  <div class="detail-item">
+                    <div class="detail-label">IP地址</div>
+                    <div class="detail-value">{{ selectedConnection.destination.ip }}</div>
+                  </div>
+                  <div class="detail-item">
+                    <div class="detail-label">端口</div>
+                    <div class="detail-value">{{ selectedConnection.destination.port }}</div>
+                  </div>
+                  <div class="detail-item">
+                    <div class="detail-label">位置</div>
+                    <div class="detail-value">{{ selectedConnection.destination.location }}</div>
+                  </div>
+                  <div class="detail-item">
+                    <div class="detail-label">服务类型</div>
+                    <div class="detail-value">API 网关</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div v-else class="no-data">
+          <i class="el-icon-s-marketing" style="font-size: 48px; margin-bottom: 15px;"></i>
+          <div style="font-size: 16px;">请从左侧列表选择一条TCP连接查看详细信息</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data: {
+        searchQuery: '',
+        timeFilter: '15',
+        statusFilter: 'all',
+        selectedConnection: null,
+        connections: [
+          {
+            id: 1,
+            status: 'healthy',
+            source: { ip: '192.168.1.12', port: 5500, location: '北京' },
+            destination: { ip: '10.10.8.22', port: 443, location: '新加坡' },
+            duration: '12:30',
+            health: 95,
+            path: [
+              {
+                role: '边缘节点',
+                ip: '10.10.1.101',
+                location: '东京',
+                status: 'healthy',
+                latency: 35,
+                packetLoss: 0.2,
+                cpu: 45,
+                alertMessage: ''
+              },
+              {
+                role: '核心网关',
+                ip: '10.10.8.22',
+                location: '新加坡',
+                status: 'healthy',
+                latency: 28,
+                packetLoss: 0.1,
+                cpu: 32,
+                alertMessage: ''
+              }
+            ]
+          },
+          {
+            id: 2,
+            status: 'warning',
+            source: { ip: '10.10.3.45', port: 3306, location: '上海' },
+            destination: { ip: 'db-cluster', port: 3307, location: '法兰克福' },
+            duration: '03:45',
+            health: 62,
+            path: [
+              {
+                role: '负载均衡器',
+                ip: '10.10.2.15',
+                location: '香港',
+                status: 'warning',
+                latency: 78,
+                packetLoss: 3.5,
+                cpu: 72,
+                alertMessage: '高延迟和高丢包率'
+              },
+              {
+                role: '数据库代理',
+                ip: '10.10.5.67',
+                location: '孟买',
+                status: 'healthy',
+                latency: 45,
+                packetLoss: 1.2,
+                cpu: 55,
+                alertMessage: ''
+              },
+              {
+                role: '数据库集群',
+                ip: 'db-cluster',
+                location: '法兰克福',
+                status: 'healthy',
+                latency: 22,
+                packetLoss: 0.3,
+                cpu: 38,
+                alertMessage: ''
+              }
+            ]
+          },
+          {
+            id: 3,
+            status: 'critical',
+            source: { ip: '172.16.0.23', port: 8080, location: '深圳' },
+            destination: { ip: 'api.gw.com', port: 443, location: '弗吉尼亚' },
+            duration: '45:22',
+            health: 30,
+            path: [
+              {
+                role: '防火墙',
+                ip: '10.10.1.88',
+                location: '首尔',
+                status: 'healthy',
+                latency: 42,
+                packetLoss: 0.8,
+                cpu: 28,
+                alertMessage: ''
+              },
+              {
+                role: 'API 网关',
+                ip: '10.10.6.42',
+                location: '东京',
+                status: 'critical',
+                latency: 320,
+                packetLoss: 8.2,
+                cpu: 92,
+                alertMessage: '高CPU负载和严重丢包'
+              },
+              {
+                role: '后端服务',
+                ip: 'api.gw.com',
+                location: '弗吉尼亚',
+                status: 'healthy',
+                latency: 25,
+                packetLoss: 0.4,
+                cpu: 45,
+                alertMessage: ''
+              }
+            ]
+          }
+        ]
+      },
+      computed: {
+        filteredConnections() {
+          let result = this.connections;
+          
+          // 状态筛选
+          if (this.statusFilter !== 'all') {
+            result = result.filter(conn => conn.status === this.statusFilter);
+          }
+          
+          // 搜索筛选
+          if (this.searchQuery) {
+            const query = this.searchQuery.toLowerCase();
+            result = result.filter(conn => {
+              return (
+                conn.source.ip.toLowerCase().includes(query) ||
+                conn.destination.ip.toLowerCase().includes(query) ||
+                String(conn.source.port).includes(query) ||
+                String(conn.destination.port).includes(query)
+              );
+            });
+          }
+          
+          return result;
+        }
+      },
+      methods: {
+        handleConnectionSelect(connection) {
+          this.selectedConnection = connection;
+        },
+        getHealthColor(percentage) {
+          if (percentage >= 85) return '#4CAF50';
+          if (percentage >= 60) return '#FFC107';
+          return '#F44336';
+        },
+        getStatusTagType(status) {
+          return {
+            'healthy': 'success',
+            'warning': 'warning',
+            'critical': 'danger'
+          }[status] || 'info';
+        },
+        getStatusText(status) {
+          return {
+            'healthy': '健康',
+            'warning': '警告',
+            'critical': '异常'
+          }[status] || '未知';
+        },
+        tableRowClassName({ row }) {
+          return this.selectedConnection && this.selectedConnection.id === row.id 
+            ? 'connection-row-active' 
+            : '';
+        }
+      },
+      mounted() {
+        // 默认选择第一条连接
+        if (this.connections.length > 0) {
+          this.selectedConnection = this.connections[0];
+        }
+      }
+    });
+  </script>
+</body>
+</html>
