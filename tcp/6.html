@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TCP连接监控系统</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #f5f7fa;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+    .app-container {
+      padding: 20px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding: 15px 20px;
+      background: #fff;
+      border-radius: 4px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 22px;
+      color: #303133;
+      font-weight: 500;
+    }
+    .stats-container {
+      display: flex;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      flex: 1;
+      background: #fff;
+      border-radius: 4px;
+      padding: 15px;
+      margin-right: 15px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+    }
+    .stat-card:last-child {
+      margin-right: 0;
+    }
+    .stat-title {
+      font-size: 14px;
+      color: #909399;
+      margin-bottom: 10px;
+    }
+    .stat-value {
+      font-size: 24px;
+      font-weight: bold;
+      color: #303133;
+    }
+    .stat-healthy {
+      color: #67C23A;
+    }
+    .stat-warning {
+      color: #E6A23C;
+    }
+    .stat-error {
+      color: #F56C6C;
+    }
+    .table-container {
+      background: #fff;
+      border-radius: 4px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+    }
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 5px;
+    }
+    .status-healthy {
+      background-color: #67C23A;
+    }
+    .status-warning {
+      background-color: #E6A23C;
+    }
+    .status-error {
+      background-color: #F56C6C;
+    }
+    .status-unknown {
+      background-color: #909399;
+    }
+    .refresh-time {
+      font-size: 12px;
+      color: #909399;
+      margin-top: 10px;
+      text-align: right;
+      padding-right: 20px;
+    }
+    .node-header {
+      text-align: center;
+      font-weight: bold;
+    }
+    .node-cell {
+      text-align: center;
+    }
+    .filter-container {
+      padding: 15px 20px;
+      background: #fff;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+    }
+    .filter-title {
+      font-size: 16px;
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #303133;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="app-container">
+      <div class="header">
+        <h1>TCP连接监控系统</h1>
+        <div>
+          <el-button type="primary" icon="el-icon-refresh" @click="refreshData">刷新数据</el-button>
+          <el-button type="info" icon="el-icon-setting">设置</el-button>
+        </div>
+      </div>
+
+      <div class="stats-container">
+        <div class="stat-card">
+          <div class="stat-title">活动连接数</div>
+          <div class="stat-value">{{ stats.activeConnections }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">健康节点</div>
+          <div class="stat-value stat-healthy">{{ stats.healthyNodes }} / {{ stats.totalNodes }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">警告节点</div>
+          <div class="stat-value stat-warning">{{ stats.warningNodes }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">故障节点</div>
+          <div class="stat-value stat-error">{{ stats.errorNodes }}</div>
+        </div>
+      </div>
+
+      <div class="filter-container">
+        <div class="filter-title">筛选条件</div>
+        <el-row :gutter="20">
+          <el-col :span="6">
+            <el-input placeholder="客户端IP" v-model="filters.clientIp" clearable>
+              <template slot="prepend">客户端</template>
+            </el-input>
+          </el-col>
+          <el-col :span="6">
+            <el-input placeholder="服务端IP" v-model="filters.serverIp" clearable>
+              <template slot="prepend">服务端</template>
+            </el-input>
+          </el-col>
+          <el-col :span="6">
+            <el-select v-model="filters.status" placeholder="连接状态" clearable style="width: 100%">
+              <el-option label="已建立" value="established"></el-option>
+              <el-option label="关闭中" value="closing"></el-option>
+              <el-option label="超时" value="timeout"></el-option>
+            </el-select>
+          </el-col>
+          <el-col :span="6">
+            <el-button type="primary" style="width: 100%">应用筛选</el-button>
+          </el-col>
+        </el-row>
+      </div>
+
+      <div class="table-container">
+        <el-table 
+          :data="filteredConnections" 
+          style="width: 100%"
+          stripe
+          v-loading="loading"
+          element-loading-text="正在加载数据..."
+        >
+          <el-table-column prop="id" label="连接ID" width="100" align="center"></el-table-column>
+          <el-table-column prop="clientIp" label="客户端IP" width="150"></el-table-column>
+          <el-table-column prop="serverIp" label="服务端IP" width="150"></el-table-column>
+          <el-table-column prop="port" label="端口" width="80" align="center"></el-table-column>
+          <el-table-column label="状态" width="120" align="center">
+            <template slot-scope="scope">
+              <span v-if="scope.row.status === 'established'" class="status-indicator status-healthy"></span>
+              <span v-else-if="scope.row.status === 'closing'" class="status-indicator status-warning"></span>
+              <span v-else class="status-indicator status-error"></span>
+              {{ scope.row.statusText }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="duration" label="持续时间" width="120" align="center"></el-table-column>
+          <el-table-column prop="traffic" label="流量(KB)" width="120" align="center"></el-table-column>
+          
+          <!-- 节点列 - 每个节点一列 -->
+          <el-table-column 
+            v-for="node in nodes" 
+            :key="node.id"
+            :label="node.name"
+            width="120"
+            align="center"
+            :class-name="'node-header'"
+          >
+            <template slot-scope="scope">
+              <div class="node-cell">
+                <span v-if="scope.row.nodes[node.id] === 'healthy'" class="status-indicator status-healthy"></span>
+                <span v-else-if="scope.row.nodes[node.id] === 'warning'" class="status-indicator status-warning"></span>
+                <span v-else-if="scope.row.nodes[node.id] === 'error'" class="status-indicator status-error"></span>
+                <span v-else class="status-indicator status-unknown"></span>
+                {{ getStatusText(scope.row.nodes[node.id]) }}
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+        
+        <div class="refresh-time">
+          最后更新时间: {{ lastRefreshTime }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          loading: true,
+          connections: [],
+          nodes: [
+            { id: 'node1', name: '接入节点' },
+            { id: 'node2', name: '路由节点' },
+            { id: 'node3', name: '防火墙' },
+            { id: 'node4', name: '业务节点' },
+            { id: 'node5', name: '数据库节点' }
+          ],
+          stats: {
+            activeConnections: 0,
+            healthyNodes: 0,
+            warningNodes: 0,
+            errorNodes: 0,
+            totalNodes: 0
+          },
+          lastRefreshTime: '',
+          filters: {
+            clientIp: '',
+            serverIp: '',
+            status: ''
+          }
+        };
+      },
+      computed: {
+        filteredConnections() {
+          return this.connections.filter(conn => {
+            const matchesClientIp = !this.filters.clientIp || 
+              conn.clientIp.includes(this.filters.clientIp);
+            const matchesServerIp = !this.filters.serverIp || 
+              conn.serverIp.includes(this.filters.serverIp);
+            const matchesStatus = !this.filters.status || 
+              conn.status === this.filters.status;
+            
+            return matchesClientIp && matchesServerIp && matchesStatus;
+          });
+        }
+      },
+      mounted() {
+        this.refreshData();
+        // 模拟实时更新
+        this.interval = setInterval(() => {
+          this.refreshData();
+        }, 10000);
+      },
+      beforeDestroy() {
+        clearInterval(this.interval);
+      },
+      methods: {
+        refreshData() {
+          this.loading = true;
+          // 模拟API请求延迟
+          setTimeout(() => {
+            this.generateData();
+            this.lastRefreshTime = new Date().toLocaleTimeString();
+            this.loading = false;
+          }, 800);
+        },
+        generateData() {
+          // 生成模拟数据
+          const connections = [];
+          const statusOptions = [
+            { status: 'established', text: '已建立' },
+            { status: 'closing', text: '关闭中' },
+            { status: 'timeout', text: '超时' }
+          ];
+          
+          // 节点状态选项
+          const nodeStatusOptions = ['healthy', 'warning', 'error', 'unknown'];
+          
+          // 生成节点统计数据
+          let healthyNodes = 0;
+          let warningNodes = 0;
+          let errorNodes = 0;
+          
+          for (let i = 1; i <= 25; i++) {
+            const statusIndex = Math.floor(Math.random() * statusOptions.length);
+            const status = statusOptions[statusIndex];
+            
+            // 生成节点状态
+            const nodes = {};
+            this.nodes.forEach(node => {
+              const nodeStatus = nodeStatusOptions[Math.floor(Math.random() * nodeStatusOptions.length)];
+              nodes[node.id] = nodeStatus;
+              
+              // 统计节点状态
+              if (i === 1) { // 只在第一次循环统计
+                if (nodeStatus === 'healthy') healthyNodes++;
+                else if (nodeStatus === 'warning') warningNodes++;
+                else if (nodeStatus === 'error') errorNodes++;
+              }
+            });
+            
+            connections.push({
+              id: `CONN${1000 + i}`,
+              clientIp: `192.168.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
+              serverIp: `10.0.${Math.floor(Math.random() * 10)}.${Math.floor(Math.random() * 255)}`,
+              port: Math.floor(Math.random() * 10000) + 1024,
+              status: status.status,
+              statusText: status.text,
+              duration: `${Math.floor(Math.random() * 60)}m${Math.floor(Math.random() * 60)}s`,
+              traffic: Math.floor(Math.random() * 10000),
+              nodes: nodes
+            });
+          }
+          
+          this.connections = connections;
+          this.stats = {
+            activeConnections: connections.length,
+            healthyNodes: healthyNodes,
+            warningNodes: warningNodes,
+            errorNodes: errorNodes,
+            totalNodes: this.nodes.length
+          };
+        },
+        getStatusText(status) {
+          const map = {
+            healthy: '健康',
+            warning: '警告',
+            error: '故障',
+            unknown: '未知'
+          };
+          return map[status] || '未知';
+        }
+      }
+    });
+  </script>
+</body>
+</html>
