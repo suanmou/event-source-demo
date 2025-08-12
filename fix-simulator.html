@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FIX Protocol Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    
+    <!-- 配置Tailwind自定义颜色和字体 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        secondary: '#36CFC9',
+                        success: '#52C41A',
+                        warning: '#FAAD14',
+                        danger: '#FF4D4F',
+                        dark: '#1D2129',
+                        'dark-light': '#4E5969',
+                        'light-bg': '#F2F3F5'
+                    },
+                    fontFamily: {
+                        mono: ['Consolas', 'Monaco', 'Courier New', 'monospace'],
+                        sans: ['Inter', 'system-ui', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            .fix-tag {
+                @apply text-primary font-semibold;
+            }
+            .scrollbar-thin {
+                scrollbar-width: thin;
+            }
+            .scrollbar-thin::-webkit-scrollbar {
+                width: 6px;
+                height: 6px;
+            }
+            .scrollbar-thin::-webkit-scrollbar-thumb {
+                @apply bg-gray-300 rounded-full;
+            }
+            .scrollbar-thin::-webkit-scrollbar-track {
+                @apply bg-gray-100;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans text-dark min-h-screen flex flex-col">
+    <!-- 顶部导航栏 -->
+    <header class="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <i class="fa fa-exchange text-primary text-2xl"></i>
+                <h1 class="text-xl md:text-2xl font-bold text-primary">FIX Protocol Simulator</h1>
+            </div>
+            
+            <div class="flex items-center space-x-4">
+                <div class="flex items-center space-x-2" id="connection-status">
+                    <span class="w-2 h-2 rounded-full bg-danger" id="status-indicator"></span>
+                    <span class="text-sm text-dark-light" id="status-text">Disconnected</span>
+                </div>
+                <button id="connect-btn" class="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center space-x-2">
+                    <i class="fa fa-plug"></i>
+                    <span>Connect</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="flex-grow container mx-auto px-4 py-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- 左侧：FIX消息输入区 -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- 消息模板选择器 -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <h2 class="text-lg font-semibold mb-3 flex items-center">
+                        <i class="fa fa-file-text-o text-primary mr-2"></i>
+                        Message Templates
+                    </h2>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button class="template-btn py-2 px-3 text-sm border border-gray-200 rounded hover:bg-light-bg transition-colors" data-template="logon">
+                            Logon (A)
+                        </button>
+                        <button class="template-btn py-2 px-3 text-sm border border-gray-200 rounded hover:bg-light-bg transition-colors" data-template="logout">
+                            Logout (5)
+                        </button>
+                        <button class="template-btn py-2 px-3 text-sm border border-gray-200 rounded hover:bg-light-bg transition-colors" data-template="new-order">
+                            New Order (D)
+                        </button>
+                        <button class="template-btn py-2 px-3 text-sm border border-gray-200 rounded hover:bg-light-bg transition-colors" data-template="order-status">
+                            Order Status (H)
+                        </button>
+                        <button class="template-btn py-2 px-3 text-sm border border-gray-200 rounded hover:bg-light-bg transition-colors" data-template="execution-report">
+                            Execution Report (8)
+                        </button>
+                        <button class="template-btn py-2 px-3 text-sm border border-gray-200 rounded hover:bg-light-bg transition-colors" data-template="heartbeat">
+                            Heartbeat (0)
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- FIX消息输入 -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-lg font-semibold flex items-center">
+                            <i class="fa fa-edit text-primary mr-2"></i>
+                            FIX Message
+                        </h2>
+                        <button id="clear-btn" class="text-dark-light hover:text-danger text-sm transition-colors">
+                            <i class="fa fa-trash-o mr-1"></i> Clear
+                        </button>
+                    </div>
+                    
+                    <div class="mb-2 text-sm text-dark-light">
+                        <span>Format: </span>
+                        <code class="bg-light-bg px-1 rounded">tag=value|tag=value|...</code>
+                    </div>
+                    
+                    <textarea 
+                        id="fix-message-input" 
+                        class="w-full h-64 p-3 border border-gray-200 rounded-md font-mono text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none resize-none scrollbar-thin"
+                        placeholder="Enter FIX message in tag=value format, separated by |...&#10;Example: 8=FIX.4.4|9=55|35=A|49=CLIENT1|56=SERVER|34=1|52=20230520-12:34:56|98=0|108=30|10=123|"></textarea>
+                    
+                    <div class="mt-3 flex justify-between items-center">
+                        <div class="text-sm text-dark-light">
+                            <span id="message-length">0</span> characters
+                        </div>
+                        <button id="send-btn" class="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center space-x-2 opacity-50 cursor-not-allowed" disabled>
+                            <i class="fa fa-paper-plane"></i>
+                            <span>Send Message</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 连接设置 -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <h2 class="text-lg font-semibold mb-3 flex items-center">
+                        <i class="fa fa-cog text-primary mr-2"></i>
+                        Connection Settings
+                    </h2>
+                    
+                    <div class="space-y-3">
+                        <div>
+                            <label for="websocket-url" class="block text-sm font-medium text-dark-light mb-1">WebSocket URL</label>
+                            <input 
+                                type="text" 
+                                id="websocket-url" 
+                                value="ws://localhost:8080" 
+                                class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none"
+                            >
+                        </div>
+                        
+                        <div>
+                            <label for="fix-engine-url" class="block text-sm font-medium text-dark-light mb-1">FIX Engine Address</label>
+                            <input 
+                                type="text" 
+                                id="fix-engine-url" 
+                                value="tcp://localhost:1234" 
+                                class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none"
+                            >
+                        </div>
+                        
+                        <div>
+                            <label for="sender-comp-id" class="block text-sm font-medium text-dark-light mb-1">SenderCompID</label>
+                            <input 
+                                type="text" 
+                                id="sender-comp-id" 
+                                value="CLIENT1" 
+                                class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none"
+                            >
+                        </div>
+                        
+                        <div>
+                            <label for="target-comp-id" class="block text-sm font-medium text-dark-light mb-1">TargetCompID</label>
+                            <input 
+                                type="text" 
+                                id="target-comp-id" 
+                                value="SERVER" 
+                                class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none"
+                            >
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 右侧：消息日志和统计 -->
+            <div class="lg:col-span-2 space-y-6">
+                <!-- 消息统计 -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <div class="text-dark-light text-sm mb-1">Total Sent</div>
+                        <div class="text-2xl font-bold text-primary" id="stat-sent">0</div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <div class="text-dark-light text-sm mb-1">Total Received</div>
+                        <div class="text-2xl font-bold text-secondary" id="stat-received">0</div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <div class="text-dark-light text-sm mb-1">Errors</div>
+                        <div class="text-2xl font-bold text-danger" id="stat-errors">0</div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <div class="text-dark-light text-sm mb-1">Connection Time</div>
+                        <div class="text-xl font-bold text-dark" id="stat-connection-time">--:--:--</div>
+                    </div>
+                </div>
+                
+                <!-- 消息日志 -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-lg font-semibold flex items-center">
+                            <i class="fa fa-history text-primary mr-2"></i>
+                            Message Log
+                        </h2>
+                        <div class="flex space-x-2">
+                            <button id="filter-all" class="filter-btn px-3 py-1 text-xs bg-primary text-white rounded">All</button>
+                            <button id="filter-sent" class="filter-btn px-3 py-1 text-xs bg-gray-200 text-dark-light rounded hover:bg-gray-300 transition-colors">Sent</button>
+                            <button id="filter-received" class="filter-btn px-3 py-1 text-xs bg-gray-200 text-dark-light rounded hover:bg-gray-300 transition-colors">Received</button>
+                            <button id="filter-errors" class="filter-btn px-3 py-1 text-xs bg-gray-200 text-dark-light rounded hover:bg-gray-300 transition-colors">Errors</button>
+                            <button id="clear-log" class="text-dark-light hover:text-danger text-xs transition-colors">
+                                <i class="fa fa-trash-o"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div id="message-log" class="h-[500px] overflow-y-auto p-2 border border-gray-200 rounded-md scrollbar-thin space-y-3">
+                        <div class="text-center text-gray-400 py-10">
+                            <i class="fa fa-inbox text-4xl mb-2 opacity-30"></i>
+                            <p>Message log will appear here</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 页脚 -->
+    <footer class="bg-white border-t border-gray-200 py-4 mt-6">
+        <div class="container mx-auto px-4 text-center text-sm text-dark-light">
+            <p>FIX Protocol Simulator v1.0 | Designed for financial messaging testing</p>
+        </div>
+    </footer>
+
+    <script>
+        // 全局变量
+        let ws;
+        let connectionStartTime = null;
+        let connectionTimer = null;
+        let stats = {
+            sent: 0,
+            received: 0,
+            errors: 0
+        };
+        
+        // DOM元素
+        const connectBtn = document.getElementById('connect-btn');
+        const sendBtn = document.getElementById('send-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const clearLogBtn = document.getElementById('clear-log');
+        const fixMessageInput = document.getElementById('fix-message-input');
+        const messageLength = document.getElementById('message-length');
+        const messageLog = document.getElementById('message-log');
+        const statusIndicator = document.getElementById('status-indicator');
+        const statusText = document.getElementById('status-text');
+        const websocketUrlInput = document.getElementById('websocket-url');
+        const fixEngineUrlInput = document.getElementById('fix-engine-url');
+        const senderCompIdInput = document.getElementById('sender-comp-id');
+        const targetCompIdInput = document.getElementById('target-comp-id');
+        const filterButtons = {
+            all: document.getElementById('filter-all'),
+            sent: document.getElementById('filter-sent'),
+            received: document.getElementById('filter-received'),
+            errors: document.getElementById('filter-errors')
+        };
+        const statElements = {
+            sent: document.getElementById('stat-sent'),
+            received: document.getElementById('stat-received'),
+            errors: document.getElementById('stat-errors'),
+            connectionTime: document.getElementById('stat-connection-time')
+        };
+        
+        // FIX消息模板
+        const fixTemplates = {
+            logon: `8=FIX.4.4|9=55|35=A|49=${senderCompIdInput.value}|56=${targetCompIdInput.value}|34=1|52={{timestamp}}|98=0|108=30|10={{checksum}}`,
+            logout: `8=FIX.4.4|9=52|35=5|49=${senderCompIdInput.value}|56=${targetCompIdInput.value}|34=2|52={{timestamp}}|58=Logout requested|10={{checksum}}`,
+            heartbeat: `8=FIX.4.4|9=45|35=0|49=${senderCompIdInput.value}|56=${targetCompIdInput.value}|34=3|52={{timestamp}}|10={{checksum}}`,
+            'new-order': `8=FIX.4.4|9=100|35=D|49=${senderCompIdInput.value}|56=${targetCompIdInput.value}|34=4|52={{timestamp}}|11=ORDER12345|21=1|38=100|40=2|44=50.25|54=1|55=AAPL|60={{timestamp}}|10={{checksum}}`,
+            'order-status': `8=FIX.4.4|9=90|35=H|49=${senderCompIdInput.value}|56=${targetCompIdInput.value}|34=5|52={{timestamp}}|11=ORDER12345|21=1|55=AAPL|10={{checksum}}`,
+            'execution-report': `8=FIX.4.4|9=120|35=8|49=${targetCompIdInput.value}|56=${senderCompIdInput.value}|34=3|52={{timestamp}}|11=ORDER12345|20=0|150=2|39=2|55=AAPL|14=100|32=100|31=50.25|10={{checksum}}`
+        };
+        
+        // 初始化
+        function init() {
+            // 事件监听
+            connectBtn.addEventListener('click', toggleConnection);
+            sendBtn.addEventListener('click', sendFixMessage);
+            clearBtn.addEventListener('click', () => fixMessageInput.value = '');
+            clearLogBtn.addEventListener('click', clearMessageLog);
+            fixMessageInput.addEventListener('input', updateMessageLength);
+            
+            // 过滤按钮事件
+            Object.values(filterButtons).forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    // 更新按钮样式
+                    Object.values(filterButtons).forEach(b => {
+                        b.classList.remove('bg-primary', 'text-white');
+                        b.classList.add('bg-gray-200', 'text-dark-light');
+                    });
+                    e.target.classList.remove('bg-gray-200', 'text-dark-light');
+                    e.target.classList.add('bg-primary', 'text-white');
+                    
+                    // 应用过滤
+                    filterMessages(e.target.id.replace('filter-', ''));
+                });
+            });
+            
+            // 模板按钮事件
+            document.querySelectorAll('.template-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const templateName = e.target.dataset.template;
+                    loadTemplate(templateName);
+                });
+            });
+            
+            // 初始更新
+            updateMessageLength();
+        }
+        
+        // 连接/断开WebSocket
+        function toggleConnection() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                // 断开连接
+                ws.close();
+            } else {
+                // 建立连接
+                connectWebSocket();
+            }
+        }
+        
+        // 连接WebSocket服务器
+        function connectWebSocket() {
+            const wsUrl = websocketUrlInput.value;
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    updateConnectionStatus(true);
+                    connectionStartTime = new Date();
+                    startConnectionTimer();
+                    
+                    // 发送连接信息到服务器
+                    const connectionInfo = {
+                        type: 'connect',
+                        fixEngineUrl: fixEngineUrlInput.value,
+                        senderCompId: senderCompIdInput.value,
+                        targetCompId: targetCompIdInput.value
+                    };
+                    ws.send(JSON.stringify(connectionInfo));
+                    
+                    addToLog('Connected to WebSocket server', 'system');
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleReceivedMessage(data);
+                    } catch (e) {
+                        // 可能是原始FIX消息
+                        addToLog(event.data, 'received');
+                        incrementStat('received');
+                    }
+                };
+                
+                ws.onclose = () => {
+                    updateConnectionStatus(false);
+                    stopConnectionTimer();
+                    addToLog('Disconnected from WebSocket server', 'system');
+                };
+                
+                ws.onerror = (error) => {
+                    addToLog(`WebSocket error: ${error.message}`, 'error');
+                    incrementStat('errors');
+                };
+            } catch (error) {
+                addToLog(`Failed to connect: ${error.message}`, 'error');
+                incrementStat('errors');
+            }
+        }
+        
+        // 处理接收到的消息
+        function handleReceivedMessage(data) {
+            if (data.type === 'fix_message') {
+                addToLog(data.content, 'received');
+                incrementStat('received');
+            } else if (data.type === 'error') {
+                addToLog(`Error: ${data.message}`, 'error');
+                incrementStat('errors');
+            } else if (data.type === 'system') {
+                addToLog(data.message, 'system');
+            }
+        }
+        
+        // 发送FIX消息
+        function sendFixMessage() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addToLog('Not connected to server', 'error');
+                incrementStat('errors');
+                return;
+            }
+            
+            const message = fixMessageInput.value.trim();
+            if (!message) {
+                addToLog('Cannot send empty message', 'error');
+                incrementStat('errors');
+                return;
+            }
+            
+            try {
+                // 验证FIX消息格式
+                if (!validateFixMessage(message)) {
+                    addToLog('Invalid FIX message format', 'error');
+                    incrementStat('errors');
+                    return;
+                }
+                
+                // 发送消息
+                ws.send(JSON.stringify({
+                    type: 'fix_message',
+                    content: message
+                }));
+                
+                // 添加到日志
+                addToLog(message, 'sent');
+                incrementStat('sent');
+                
+                // 清空输入
+                fixMessageInput.value = '';
+                updateMessageLength();
+            } catch (error) {
+                addToLog(`Failed to send message: ${error.message}`, 'error');
+                incrementStat('errors');
+            }
+        }
+        
+        // 验证FIX消息格式
+        function validateFixMessage(message) {
+            const pairs = message.split('|');
+            if (pairs.length === 0) return false;
+            
+            // 检查每个键值对
+            for (const pair of pairs) {
+                if (!pair.includes('=')) return false;
+                const [tag, value] = pair.split('=');
+                if (!tag || tag.trim() === '' || isNaN(tag)) return false;
+            }
+            
+            return true;
+        }
+        
+        // 加载消息模板
+        function loadTemplate(templateName) {
+            if (!fixTemplates[templateName]) return;
+            
+            let template = fixTemplates[templateName];
+            
+            // 替换时间戳
+            const now = new Date();
+            const timestamp = now.toISOString().replace('T', '-').replace(/\.\d{3}Z$/, '');
+            template = template.replace(/{{timestamp}}/g, timestamp);
+            
+            // 简单计算校验和 (实际应用中应使用正确的FIX校验和算法)
+            if (template.includes('{{checksum}}')) {
+                const tempMsg = template.replace('10={{checksum}}', '');
+                let sum = 0;
+                for (let i = 0; i < tempMsg.length; i++) {
+                    sum += tempMsg.charCodeAt(i);
+                }
+                const checksum = (sum % 256).toString().padStart(3, '0');
+                template = template.replace('{{checksum}}', checksum);
+            }
+            
+            fixMessageInput.value = template;
+            updateMessageLength();
+        }
+        
+        // 添加消息到日志
+        function addToLog(message, type) {
+            // 清除初始提示
+            if (messageLog.querySelector('.text-center')) {
+                messageLog.innerHTML = '';
+            }
+            
+            const timestamp = new Date().toLocaleTimeString();
+            const logItem = document.createElement('div');
+            logItem.className = `p-3 rounded-md border ${
+                type === 'sent' ? 'border-primary bg-primary/5' :
+                type === 'received' ? 'border-secondary bg-secondary/5' :
+                type === 'error' ? 'border-danger bg-danger/5' :
+                'border-gray-200 bg-gray-50'
+            }`;
+            logItem.dataset.type = type;
+            
+            // 格式化FIX消息，高亮标签
+            let formattedMessage = message;
+            if (type === 'sent' || type === 'received') {
+                formattedMessage = formatFixMessage(message);
+            }
+            
+            logItem.innerHTML = `
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-xs font-medium ${
+                        type === 'sent' ? 'text-primary' :
+                        type === 'received' ? 'text-secondary' :
+                        type === 'error' ? 'text-danger' : 'text-dark-light'
+                    }">
+                        ${type === 'sent' ? 'Sent' : 
+                          type === 'received' ? 'Received' : 
+                          type === 'error' ? 'Error' : 'System'}
+                    </span>
+                    <span class="text-xs text-dark-light">${timestamp}</span>
+                </div>
+                <div class="text-sm font-mono whitespace-pre-wrap break-all">${formattedMessage}</div>
+            `;
+            
+            messageLog.appendChild(logItem);
+            messageLog.scrollTop = messageLog.scrollHeight;
+        }
+        
+        // 格式化FIX消息，高亮标签
+        function formatFixMessage(message) {
+            return message.replace(/(\d+)=/g, '<span class="fix-tag">$1=</span>');
+        }
+        
+        // 过滤日志消息
+        function filterMessages(filterType) {
+            const logItems = messageLog.querySelectorAll('div[data-type]');
+            
+            logItems.forEach(item => {
+                if (filterType === 'all' || item.dataset.type === filterType) {
+                    item.style.display = 'block';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        }
+        
+        // 清空消息日志
+        function clearMessageLog() {
+            messageLog.innerHTML = `
+                <div class="text-center text-gray-400 py-10">
+                    <i class="fa fa-inbox text-4xl mb-2 opacity-30"></i>
+                    <p>Message log will appear here</p>
+                </div>
+            `;
+        }
+        
+        // 更新连接状态
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                statusIndicator.className = 'w-2 h-2 rounded-full bg-success';
+                statusText.textContent = 'Connected';
+                connectBtn.innerHTML = '<i class="fa fa-unplug"></i><span>Disconnect</span>';
+                connectBtn.classList.remove('bg-primary');
+                connectBtn.classList.add('bg-danger');
+                sendBtn.disabled = false;
+                sendBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                
+                // 禁用连接设置
+                websocketUrlInput.disabled = true;
+                fixEngineUrlInput.disabled = true;
+                senderCompIdInput.disabled = true;
+                targetCompIdInput.disabled = true;
+            } else {
+                statusIndicator.className = 'w-2 h-2 rounded-full bg-danger';
+                statusText.textContent = 'Disconnected';
+                connectBtn.innerHTML = '<i class="fa fa-plug"></i><span>Connect</span>';
+                connectBtn.classList.remove('bg-danger');
+                connectBtn.classList.add('bg-primary');
+                sendBtn.disabled = true;
+                sendBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                
+                // 启用连接设置
+                websocketUrlInput.disabled = false;
+                fixEngineUrlInput.disabled = false;
+                senderCompIdInput.disabled = false;
+                targetCompIdInput.disabled = false;
+            }
+        }
+        
+        // 更新消息长度计数
+        function updateMessageLength() {
+            messageLength.textContent = fixMessageInput.value.length;
+        }
+        
+        // 统计相关函数
+        function incrementStat(type) {
+            if (stats[type] !== undefined) {
+                stats[type]++;
+                statElements[type].textContent = stats[type];
+            }
+        }
+        
+        // 连接计时器
+        function startConnectionTimer() {
+            if (connectionTimer) clearInterval(connectionTimer);
+            
+            connectionTimer = setInterval(() => {
+                if (!connectionStartTime) return;
+                
+                const now = new Date();
+                const diff = now - connectionStartTime;
+                
+                // 计算时分秒
+                const hours = Math.floor(diff / 3600000).toString().padStart(2, '0');
+                const minutes = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
+                const seconds = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+                
+                statElements.connectionTime.textContent = `${hours}:${minutes}:${seconds}`;
+            }, 1000);
+        }
+        
+        function stopConnectionTimer() {
+            if (connectionTimer) {
+                clearInterval(connectionTimer);
+                connectionTimer = null;
+                statElements.connectionTime.textContent = '--:--:--';
+            }
+        }
+        
+        // 页面加载完成后初始化
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

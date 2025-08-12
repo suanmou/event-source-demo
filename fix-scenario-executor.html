@@ -1,0 +1,1607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FIX Protocol Simulator - Scenario Executor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+    
+    <!-- 配置Tailwind自定义颜色和字体 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        secondary: '#36CFC9',
+                        success: '#52C41A',
+                        warning: '#FAAD14',
+                        danger: '#FF4D4F',
+                        dark: '#1D2129',
+                        'dark-light': '#4E5969',
+                        'light-bg': '#F2F3F5'
+                    },
+                    fontFamily: {
+                        mono: ['Consolas', 'Monaco', 'Courier New', 'monospace'],
+                        sans: ['Inter', 'system-ui', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            .fix-tag {
+                @apply text-primary font-semibold;
+            }
+            .scrollbar-thin {
+                scrollbar-width: thin;
+            }
+            .scrollbar-thin::-webkit-scrollbar {
+                width: 6px;
+                height: 6px;
+            }
+            .scrollbar-thin::-webkit-scrollbar-thumb {
+                @apply bg-gray-300 rounded-full;
+            }
+            .scrollbar-thin::-webkit-scrollbar-track {
+                @apply bg-gray-100;
+            }
+            .scenario-step {
+                @apply p-3 border rounded-md mb-2 transition-all duration-200;
+            }
+            .scenario-step-active {
+                @apply border-primary bg-primary/5 shadow-sm;
+            }
+            .scenario-step-completed {
+                @apply border-success bg-success/5;
+            }
+            .scenario-step-error {
+                @apply border-danger bg-danger/5;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans text-dark min-h-screen flex flex-col">
+    <!-- 顶部导航栏 -->
+    <header class="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <i class="fa fa-sitemap text-primary text-2xl"></i>
+                <h1 class="text-xl md:text-2xl font-bold text-primary">FIX Scenario Executor</h1>
+            </div>
+            
+            <div class="flex items-center space-x-6">
+                <div class="hidden md:flex items-center space-x-4">
+                    <a href="fix-simulator.html" class="text-dark-light hover:text-primary transition-colors">
+                        <i class="fa fa-exchange mr-1"></i> Message Sender
+                    </a>
+                    <a href="#" class="text-primary font-medium">
+                        <i class="fa fa-play-circle mr-1"></i> Scenario Executor
+                    </a>
+                </div>
+                
+                <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-2" id="connection-status">
+                        <span class="w-2 h-2 rounded-full bg-danger" id="status-indicator"></span>
+                        <span class="text-sm text-dark-light" id="status-text">Disconnected</span>
+                    </div>
+                    <button id="connect-btn" class="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center space-x-2">
+                        <i class="fa fa-plug"></i>
+                        <span>Connect</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="flex-grow container mx-auto px-4 py-6">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <!-- 左侧：场景列表和编辑器 -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- 场景列表 -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-lg font-semibold flex items-center">
+                            <i class="fa fa-list-alt text-primary mr-2"></i>
+                            Saved Scenarios
+                        </h2>
+                        <button id="new-scenario-btn" class="text-primary hover:text-primary/80 transition-colors">
+                            <i class="fa fa-plus-circle"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="space-y-1 max-h-60 overflow-y-auto scrollbar-thin" id="scenarios-list">
+                        <button class="scenario-item w-full text-left px-3 py-2 rounded hover:bg-light-bg text-sm transition-colors" data-scenario="new-order-flow">
+                            <i class="fa fa-arrow-circle-right mr-2 text-primary"></i>New Order Flow
+                        </button>
+                        <button class="scenario-item w-full text-left px-3 py-2 rounded hover:bg-light-bg text-sm transition-colors" data-scenario="session-management">
+                            <i class="fa fa-refresh mr-2 text-primary"></i>Session Management
+                        </button>
+                        <button class="scenario-item w-full text-left px-3 py-2 rounded hover:bg-light-bg text-sm transition-colors" data-scenario="order-cancel-replace">
+                            <i class="fa fa-exchange mr-2 text-primary"></i>Order Cancel/Replace
+                        </button>
+                        <button class="scenario-item w-full text-left px-3 py-2 rounded hover:bg-light-bg text-sm transition-colors" data-scenario="mass-quote">
+                            <i class="fa fa-tags mr-2 text-primary"></i>Mass Quote Workflow
+                        </button>
+                    </div>
+                    
+                    <div class="mt-3 pt-3 border-t border-gray-100 flex space-x-2">
+                        <button id="save-scenario-btn" class="flex-1 bg-primary hover:bg-primary/90 text-white px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center justify-center space-x-1">
+                            <i class="fa fa-save"></i>
+                            <span>Save</span>
+                        </button>
+                        <button id="delete-scenario-btn" class="flex-1 bg-white hover:bg-gray-100 text-dark-light border border-gray-200 px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center justify-center space-x-1">
+                            <i class="fa fa-trash-o"></i>
+                            <span>Delete</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 场景编辑器 -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-lg font-semibold flex items-center">
+                            <i class="fa fa-pencil text-primary mr-2"></i>
+                            Scenario Editor
+                        </h2>
+                        <div>
+                            <button id="add-step-btn" class="text-success hover:text-success/80 transition-colors">
+                                <i class="fa fa-plus"></i> Add Step
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="scenario-name" class="block text-sm font-medium text-dark-light mb-1">Scenario Name</label>
+                        <input 
+                            type="text" 
+                            id="scenario-name" 
+                            value="New Order Flow" 
+                            class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none"
+                        >
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="scenario-description" class="block text-sm font-medium text-dark-light mb-1">Description</label>
+                        <textarea 
+                            id="scenario-description" 
+                            rows="2"
+                            class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none"
+                        >Simulates a complete new order workflow: Logon → New Order → Execution Report → Logout</textarea>
+                    </div>
+                    
+                    <div id="scenario-steps" class="space-y-2 max-h-60 overflow-y-auto scrollbar-thin pb-2">
+                        <!-- 步骤1 -->
+                        <div class="scenario-step" data-step-index="0">
+                            <div class="flex justify-between items-center mb-2">
+                                <div class="flex items-center">
+                                    <span class="w-6 h-6 rounded-full bg-primary text-white text-xs flex items-center justify-center mr-2">1</span>
+                                    <select class="step-action text-sm border-none bg-transparent focus:ring-0 focus:outline-none text-dark">
+                                        <option value="send">Send Message</option>
+                                        <option value="wait">Wait</option>
+                                        <option value="verify">Verify Response</option>
+                                    </select>
+                                </div>
+                                <div class="flex space-x-1">
+                                    <button class="move-step up text-dark-light hover:text-primary" title="Move up">
+                                        <i class="fa fa-chevron-up text-xs"></i>
+                                    </button>
+                                    <button class="move-step down text-dark-light hover:text-primary" title="Move down">
+                                        <i class="fa fa-chevron-down text-xs"></i>
+                                    </button>
+                                    <button class="delete-step text-dark-light hover:text-danger" title="Delete step">
+                                        <i class="fa fa-times text-xs"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="step-parameters">
+                                <select class="w-full mb-2 text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none" id="message-type-0">
+                                    <option value="logon">Logon (A)</option>
+                                    <option value="logout">Logout (5)</option>
+                                    <option value="new-order">New Order (D)</option>
+                                    <option value="order-status">Order Status (H)</option>
+                                    <option value="execution-report">Execution Report (8)</option>
+                                    <option value="heartbeat">Heartbeat (0)</option>
+                                    <option value="custom">Custom Message</option>
+                                </select>
+                                <textarea 
+                                    id="message-content-0" 
+                                    class="w-full h-24 p-2 border border-gray-200 rounded-md font-mono text-xs focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none resize-none scrollbar-thin"
+                                >8=FIX.4.4|9=55|35=A|49=CLIENT1|56=SERVER|34=1|52={{timestamp}}|98=0|108=30|10={{checksum}}</textarea>
+                            </div>
+                        </div>
+                        
+                        <!-- 步骤2 -->
+                        <div class="scenario-step" data-step-index="1">
+                            <div class="flex justify-between items-center mb-2">
+                                <div class="flex items-center">
+                                    <span class="w-6 h-6 rounded-full bg-primary text-white text-xs flex items-center justify-center mr-2">2</span>
+                                    <select class="step-action text-sm border-none bg-transparent focus:ring-0 focus:outline-none text-dark">
+                                        <option value="send">Send Message</option>
+                                        <option value="wait">Wait</option>
+                                        <option value="verify">Verify Response</option>
+                                    </select>
+                                </div>
+                                <div class="flex space-x-1">
+                                    <button class="move-step up text-dark-light hover:text-primary" title="Move up">
+                                        <i class="fa fa-chevron-up text-xs"></i>
+                                    </button>
+                                    <button class="move-step down text-dark-light hover:text-primary" title="Move down">
+                                        <i class="fa fa-chevron-down text-xs"></i>
+                                    </button>
+                                    <button class="delete-step text-dark-light hover:text-danger" title="Delete step">
+                                        <i class="fa fa-times text-xs"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="step-parameters">
+                                <select class="w-full mb-2 text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none" id="message-type-1">
+                                    <option value="logon">Logon (A)</option>
+                                    <option value="logout">Logout (5)</option>
+                                    <option value="new-order" selected>New Order (D)</option>
+                                    <option value="order-status">Order Status (H)</option>
+                                    <option value="execution-report">Execution Report (8)</option>
+                                    <option value="heartbeat">Heartbeat (0)</option>
+                                    <option value="custom">Custom Message</option>
+                                </select>
+                                <textarea 
+                                    id="message-content-1" 
+                                    class="w-full h-24 p-2 border border-gray-200 rounded-md font-mono text-xs focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none resize-none scrollbar-thin"
+                                >8=FIX.4.4|9=100|35=D|49=CLIENT1|56=SERVER|34=2|52={{timestamp}}|11=ORDER{{random}}|21=1|38=100|40=2|44=50.25|54=1|55=AAPL|60={{timestamp}}|10={{checksum}}</textarea>
+                            </div>
+                        </div>
+                        
+                        <!-- 步骤3 -->
+                        <div class="scenario-step" data-step-index="2">
+                            <div class="flex justify-between items-center mb-2">
+                                <div class="flex items-center">
+                                    <span class="w-6 h-6 rounded-full bg-primary text-white text-xs flex items-center justify-center mr-2">3</span>
+                                    <select class="step-action text-sm border-none bg-transparent focus:ring-0 focus:outline-none text-dark">
+                                        <option value="send">Send Message</option>
+                                        <option value="wait" selected>Wait</option>
+                                        <option value="verify">Verify Response</option>
+                                    </select>
+                                </div>
+                                <div class="flex space-x-1">
+                                    <button class="move-step up text-dark-light hover:text-primary" title="Move up">
+                                        <i class="fa fa-chevron-up text-xs"></i>
+                                    </button>
+                                    <button class="move-step down text-dark-light hover:text-primary" title="Move down">
+                                        <i class="fa fa-chevron-down text-xs"></i>
+                                    </button>
+                                    <button class="delete-step text-dark-light hover:text-danger" title="Delete step">
+                                        <i class="fa fa-times text-xs"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="step-parameters">
+                                <div class="flex items-center mb-2">
+                                    <label class="text-sm text-dark-light mr-2">Duration:</label>
+                                    <input type="number" value="5" min="1" max="60" class="w-16 text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none">
+                                    <span class="text-sm text-dark-light ml-1">seconds</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 步骤4 -->
+                        <div class="scenario-step" data-step-index="3">
+                            <div class="flex justify-between items-center mb-2">
+                                <div class="flex items-center">
+                                    <span class="w-6 h-6 rounded-full bg-primary text-white text-xs flex items-center justify-center mr-2">4</span>
+                                    <select class="step-action text-sm border-none bg-transparent focus:ring-0 focus:outline-none text-dark">
+                                        <option value="send">Send Message</option>
+                                        <option value="wait">Wait</option>
+                                        <option value="verify" selected>Verify Response</option>
+                                    </select>
+                                </div>
+                                <div class="flex space-x-1">
+                                    <button class="move-step up text-dark-light hover:text-primary" title="Move up">
+                                        <i class="fa fa-chevron-up text-xs"></i>
+                                    </button>
+                                    <button class="move-step down text-dark-light hover:text-primary" title="Move down">
+                                        <i class="fa fa-chevron-down text-xs"></i>
+                                    </button>
+                                    <button class="delete-step text-dark-light hover:text-danger" title="Delete step">
+                                        <i class="fa fa-times text-xs"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="step-parameters">
+                                <label class="text-sm text-dark-light block mb-1">Expected Message Type:</label>
+                                <select class="w-full mb-2 text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none">
+                                    <option value="execution-report" selected>Execution Report (8)</option>
+                                    <option value="order-status">Order Status (H)</option>
+                                    <option value="reject">Reject (3)</option>
+                                    <option value="custom">Custom</option>
+                                </select>
+                                
+                                <label class="text-sm text-dark-light block mb-1">Validation Criteria:</label>
+                                <textarea 
+                                    class="w-full h-16 p-2 border border-gray-200 rounded-md font-mono text-xs focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none resize-none scrollbar-thin"
+                                    placeholder="35=8|150=2|39=2"
+                                >35=8|150=2|39=2</textarea>
+                            </div>
+                        </div>
+                        
+                        <!-- 步骤5 -->
+                        <div class="scenario-step" data-step-index="4">
+                            <div class="flex justify-between items-center mb-2">
+                                <div class="flex items-center">
+                                    <span class="w-6 h-6 rounded-full bg-primary text-white text-xs flex items-center justify-center mr-2">5</span>
+                                    <select class="step-action text-sm border-none bg-transparent focus:ring-0 focus:outline-none text-dark">
+                                        <option value="send" selected>Send Message</option>
+                                        <option value="wait">Wait</option>
+                                        <option value="verify">Verify Response</option>
+                                    </select>
+                                </div>
+                                <div class="flex space-x-1">
+                                    <button class="move-step up text-dark-light hover:text-primary" title="Move up">
+                                        <i class="fa fa-chevron-up text-xs"></i>
+                                    </button>
+                                    <button class="move-step down text-dark-light hover:text-primary" title="Move down">
+                                        <i class="fa fa-chevron-down text-xs"></i>
+                                    </button>
+                                    <button class="delete-step text-dark-light hover:text-danger" title="Delete step">
+                                        <i class="fa fa-times text-xs"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="step-parameters">
+                                <select class="w-full mb-2 text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none" id="message-type-4">
+                                    <option value="logon">Logon (A)</option>
+                                    <option value="logout" selected>Logout (5)</option>
+                                    <option value="new-order">New Order (D)</option>
+                                    <option value="order-status">Order Status (H)</option>
+                                    <option value="execution-report">Execution Report (8)</option>
+                                    <option value="heartbeat">Heartbeat (0)</option>
+                                    <option value="custom">Custom Message</option>
+                                </select>
+                                <textarea 
+                                    id="message-content-4" 
+                                    class="w-full h-24 p-2 border border-gray-200 rounded-md font-mono text-xs focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none resize-none scrollbar-thin"
+                                >8=FIX.4.4|9=52|35=5|49=CLIENT1|56=SERVER|34=3|52={{timestamp}}|58=Logout requested|10={{checksum}}</textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 右侧：场景执行和结果 -->
+            <div class="lg:col-span-3 space-y-6">
+                <!-- 执行控制和统计 -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <div class="text-dark-light text-sm mb-1">Total Steps</div>
+                        <div class="text-2xl font-bold text-primary" id="stat-total-steps">0</div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <div class="text-dark-light text-sm mb-1">Completed Steps</div>
+                        <div class="text-2xl font-bold text-success" id="stat-completed-steps">0</div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <div class="text-dark-light text-sm mb-1">Failed Steps</div>
+                        <div class="text-2xl font-bold text-danger" id="stat-failed-steps">0</div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <div class="text-dark-light text-sm mb-1">Execution Time</div>
+                        <div class="text-xl font-bold text-dark" id="stat-execution-time">00:00</div>
+                    </div>
+                </div>
+                
+                <!-- 执行控制 -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <div class="flex flex-wrap justify-between items-center mb-3">
+                        <h2 class="text-lg font-semibold flex items-center">
+                            <i class="fa fa-play-circle text-primary mr-2"></i>
+                            Execution Control
+                        </h2>
+                        
+                        <div class="flex space-x-3 mt-2 sm:mt-0">
+                            <div class="flex items-center">
+                                <label for="execution-speed" class="text-sm text-dark-light mr-2">Speed:</label>
+                                <select id="execution-speed" class="text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none">
+                                    <option value="slow">Slow</option>
+                                    <option value="normal" selected>Normal</option>
+                                    <option value="fast">Fast</option>
+                                    <option value="turbo">Turbo</option>
+                                </select>
+                            </div>
+                            
+                            <div class="flex space-x-2">
+                                <button id="run-scenario-btn" class="bg-success hover:bg-success/90 text-white px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center space-x-2">
+                                    <i class="fa fa-play"></i>
+                                    <span>Run Scenario</span>
+                                </button>
+                                <button id="stop-scenario-btn" class="bg-danger hover:bg-danger/90 text-white px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center space-x-2 opacity-50 cursor-not-allowed" disabled>
+                                    <i class="fa fa-stop"></i>
+                                    <span>Stop</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 执行进度 -->
+                    <div class="mb-4">
+                        <div class="flex justify-between text-sm mb-1">
+                            <span class="text-dark-light">Execution Progress</span>
+                            <span class="font-medium" id="progress-percentage">0%</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2.5">
+                            <div id="progress-bar" class="bg-success h-2.5 rounded-full w-0 transition-all duration-300"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- 执行状态 -->
+                    <div class="flex items-center">
+                        <span class="w-2 h-2 rounded-full bg-gray-300 mr-2" id="execution-status-indicator"></span>
+                        <span class="text-sm text-dark-light" id="execution-status-text">Ready to run</span>
+                    </div>
+                </div>
+                
+                <!-- 执行日志和结果 -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-lg font-semibold flex items-center">
+                            <i class="fa fa-execution-report text-primary mr-2"></i>
+                            Execution Log
+                        </h2>
+                        <div class="flex space-x-2">
+                            <button id="clear-execution-log" class="text-dark-light hover:text-danger text-xs transition-colors">
+                                <i class="fa fa-trash-o"></i> Clear Log
+                            </button>
+                            <button id="export-execution-log" class="text-dark-light hover:text-primary text-xs transition-colors">
+                                <i class="fa fa-download"></i> Export Log
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div id="execution-log" class="h-[400px] overflow-y-auto p-2 border border-gray-200 rounded-md scrollbar-thin space-y-3">
+                        <div class="text-center text-gray-400 py-10">
+                            <i class="fa fa-list-alt text-4xl mb-2 opacity-30"></i>
+                            <p>Execution log will appear here when you run a scenario</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 场景执行分析 -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <h2 class="text-lg font-semibold mb-3 flex items-center">
+                        <i class="fa fa-bar-chart text-primary mr-2"></i>
+                        Scenario Analysis
+                    </h2>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <canvas id="steps-chart" height="200"></canvas>
+                        </div>
+                        <div>
+                            <canvas id="timing-chart" height="200"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 页脚 -->
+    <footer class="bg-white border-t border-gray-200 py-4 mt-6">
+        <div class="container mx-auto px-4 text-center text-sm text-dark-light">
+            <p>FIX Protocol Simulator v1.0 | Scenario Executor</p>
+        </div>
+    </footer>
+
+    <script>
+        // 全局变量
+        let ws;
+        let currentScenario = null;
+        let isExecuting = false;
+        let executionInterval = null;
+        let currentStepIndex = 0;
+        let executionStartTime = null;
+        let stepsData = [];
+        let charts = {};
+        
+        // DOM元素
+        const connectBtn = document.getElementById('connect-btn');
+        const runScenarioBtn = document.getElementById('run-scenario-btn');
+        const stopScenarioBtn = document.getElementById('stop-scenario-btn');
+        const newScenarioBtn = document.getElementById('new-scenario-btn');
+        const saveScenarioBtn = document.getElementById('save-scenario-btn');
+        const deleteScenarioBtn = document.getElementById('delete-scenario-btn');
+        const addStepBtn = document.getElementById('add-step-btn');
+        const clearExecutionLogBtn = document.getElementById('clear-execution-log');
+        const exportExecutionLogBtn = document.getElementById('export-execution-log');
+        const scenarioNameInput = document.getElementById('scenario-name');
+        const scenarioDescriptionInput = document.getElementById('scenario-description');
+        const scenarioStepsContainer = document.getElementById('scenario-steps');
+        const scenariosList = document.getElementById('scenarios-list');
+        const progressBar = document.getElementById('progress-bar');
+        const progressPercentage = document.getElementById('progress-percentage');
+        const executionStatusIndicator = document.getElementById('execution-status-indicator');
+        const executionStatusText = document.getElementById('execution-status-text');
+        const executionLog = document.getElementById('execution-log');
+        const executionSpeedSelect = document.getElementById('execution-speed');
+        const statusIndicator = document.getElementById('status-indicator');
+        const statusText = document.getElementById('status-text');
+        
+        // 统计元素
+        const statElements = {
+            totalSteps: document.getElementById('stat-total-steps'),
+            completedSteps: document.getElementById('stat-completed-steps'),
+            failedSteps: document.getElementById('stat-failed-steps'),
+            executionTime: document.getElementById('stat-execution-time')
+        };
+        
+        // FIX消息模板
+        const fixTemplates = {
+            logon: `8=FIX.4.4|9=55|35=A|49=CLIENT1|56=SERVER|34={{seq}}|52={{timestamp}}|98=0|108=30|10={{checksum}}`,
+            logout: `8=FIX.4.4|9=52|35=5|49=CLIENT1|56=SERVER|34={{seq}}|52={{timestamp}}|58=Logout requested|10={{checksum}}`,
+            heartbeat: `8=FIX.4.4|9=45|35=0|49=CLIENT1|56=SERVER|34={{seq}}|52={{timestamp}}|10={{checksum}}`,
+            'new-order': `8=FIX.4.4|9=100|35=D|49=CLIENT1|56=SERVER|34={{seq}}|52={{timestamp}}|11=ORDER{{random}}|21=1|38=100|40=2|44=50.25|54=1|55=AAPL|60={{timestamp}}|10={{checksum}}`,
+            'order-status': `8=FIX.4.4|9=90|35=H|49=CLIENT1|56=SERVER|34={{seq}}|52={{timestamp}}|11=ORDER{{random}}|21=1|55=AAPL|10={{checksum}}`,
+            'execution-report': `8=FIX.4.4|9=120|35=8|49=SERVER|56=CLIENT1|34={{seq}}|52={{timestamp}}|11=ORDER{{random}}|20=0|150=2|39=2|55=AAPL|14=100|32=100|31=50.25|10={{checksum}}`
+        };
+        
+        // 预设场景
+        const predefinedScenarios = {
+            'new-order-flow': {
+                name: 'New Order Flow',
+                description: 'Simulates a complete new order workflow: Logon → New Order → Execution Report → Logout',
+                steps: [
+                    // 步骤定义...
+                ]
+            },
+            'session-management': {
+                name: 'Session Management',
+                description: 'Tests session management functionality: Logon → Multiple Heartbeats → Logout',
+                steps: [
+                    // 步骤定义...
+                ]
+            },
+            'order-cancel-replace': {
+                name: 'Order Cancel/Replace',
+                description: 'Simulates order modification: New Order → Cancel/Replace → Execution Reports',
+                steps: [
+                    // 步骤定义...
+                ]
+            },
+            'mass-quote': {
+                name: 'Mass Quote Workflow',
+                description: 'Tests quote request and response flow: Quote Request → Mass Quote → Quote Accept',
+                steps: [
+                    // 步骤定义...
+                ]
+            }
+        };
+        
+        // 初始化
+        function init() {
+            // 初始化图表
+            initCharts();
+            
+            // 事件监听
+            connectBtn.addEventListener('click', toggleConnection);
+            runScenarioBtn.addEventListener('click', startScenarioExecution);
+            stopScenarioBtn.addEventListener('click', stopScenarioExecution);
+            newScenarioBtn.addEventListener('click', createNewScenario);
+            saveScenarioBtn.addEventListener('click', saveScenario);
+            deleteScenarioBtn.addEventListener('click', deleteCurrentScenario);
+            addStepBtn.addEventListener('click', addNewStep);
+            clearExecutionLogBtn.addEventListener('click', clearExecutionLog);
+            exportExecutionLogBtn.addEventListener('click', exportExecutionLog);
+            executionSpeedSelect.addEventListener('change', updateExecutionSpeed);
+            
+            // 场景列表点击事件委托
+            scenariosList.addEventListener('click', (e) => {
+                const scenarioItem = e.target.closest('.scenario-item');
+                if (scenarioItem) {
+                    loadScenario(scenarioItem.dataset.scenario);
+                }
+            });
+            
+            // 步骤事件委托
+            scenarioStepsContainer.addEventListener('click', (e) => {
+                // 删除步骤
+                const deleteBtn = e.target.closest('.delete-step');
+                if (deleteBtn) {
+                    const stepElement = deleteBtn.closest('.scenario-step');
+                    if (stepElement) {
+                        deleteStep(stepElement.dataset.stepIndex);
+                    }
+                    return;
+                }
+                
+                // 移动步骤
+                const moveBtn = e.target.closest('.move-step');
+                if (moveBtn) {
+                    const stepElement = moveBtn.closest('.scenario-step');
+                    const direction = moveBtn.classList.contains('up') ? 'up' : 'down';
+                    if (stepElement) {
+                        moveStep(stepElement.dataset.stepIndex, direction);
+                    }
+                    return;
+                }
+                
+                // 步骤动作变更
+                const actionSelect = e.target.closest('.step-action');
+                if (actionSelect) {
+                    const stepElement = actionSelect.closest('.scenario-step');
+                    updateStepParameters(stepElement.dataset.stepIndex, actionSelect.value);
+                    return;
+                }
+                
+                // 消息类型变更
+                const msgTypeSelect = e.target.closest('select[id^="message-type-"]');
+                if (msgTypeSelect) {
+                    const stepIndex = msgTypeSelect.id.split('-')[2];
+                    const msgType = msgTypeSelect.value;
+                    updateMessageTemplate(stepIndex, msgType);
+                    return;
+                }
+            });
+            
+            // 初始更新
+            updateStepNumbers();
+            updateScenarioStats();
+        }
+        
+        // 初始化图表
+        function initCharts() {
+            // 步骤状态图表
+            const stepsCtx = document.getElementById('steps-chart').getContext('2d');
+            charts.stepsChart = new Chart(stepsCtx, {
+                type: 'pie',
+                data: {
+                    labels: ['Completed', 'Failed', 'Pending'],
+                    datasets: [{
+                        data: [0, 0, 0],
+                        backgroundColor: ['#52C41A', '#FF4D4F', '#165DFF'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        },
+                        title: {
+                            display: true,
+                            text: 'Steps by Status'
+                        }
+                    }
+                }
+            });
+            
+            // 步骤时间图表
+            const timingCtx = document.getElementById('timing-chart').getContext('2d');
+            charts.timingChart = new Chart(timingCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Duration (ms)',
+                        data: [],
+                        backgroundColor: '#165DFF',
+                        borderWidth: 0,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        title: {
+                            display: true,
+                            text: 'Step Execution Time'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Milliseconds'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // 更新图表数据
+        function updateCharts() {
+            if (stepsData.length === 0) return;
+            
+            // 更新步骤状态图表
+            const completed = stepsData.filter(step => step.status === 'completed').length;
+            const failed = stepsData.filter(step => step.status === 'failed').length;
+            const pending = stepsData.filter(step => step.status === 'pending').length;
+            
+            charts.stepsChart.data.datasets[0].data = [completed, failed, pending];
+            charts.stepsChart.update();
+            
+            // 更新步骤时间图表
+            const labels = stepsData.map((step, index) => `Step ${index + 1}`);
+            const durations = stepsData.map(step => step.duration || 0);
+            
+            charts.timingChart.data.labels = labels;
+            charts.timingChart.data.datasets[0].data = durations;
+            charts.timingChart.update();
+        }
+        
+        // 连接/断开WebSocket
+        function toggleConnection() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                // 断开连接
+                ws.close();
+            } else {
+                // 建立连接
+                connectWebSocket();
+            }
+        }
+        
+        // 连接WebSocket服务器
+        function connectWebSocket() {
+            const wsUrl = 'ws://localhost:8080'; // 可以从配置中获取
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    updateConnectionStatus(true);
+                    addToExecutionLog('Connected to WebSocket server', 'system');
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleReceivedMessage(data);
+                    } catch (e) {
+                        // 可能是原始FIX消息
+                        addToExecutionLog(`Received: ${event.data}`, 'received');
+                    }
+                };
+                
+                ws.onclose = () => {
+                    updateConnectionStatus(false);
+                    addToExecutionLog('Disconnected from WebSocket server', 'system');
+                    
+                    if (isExecuting) {
+                        stopScenarioExecution();
+                        addToExecutionLog('Scenario execution stopped due to connection loss', 'error');
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    addToExecutionLog(`WebSocket error: ${error.message}`, 'error');
+                };
+            } catch (error) {
+                addToExecutionLog(`Failed to connect: ${error.message}`, 'error');
+            }
+        }
+        
+        // 处理接收到的消息
+        function handleReceivedMessage(data) {
+            if (data.type === 'fix_message') {
+                addToExecutionLog(`Received: ${formatFixMessage(data.content)}`, 'received');
+                
+                // 如果正在执行且等待验证，检查消息
+                if (isExecuting && currentStepIndex < stepsData.length && 
+                    stepsData[currentStepIndex].action === 'verify') {
+                    verifyMessageAgainstStep(data.content, currentStepIndex);
+                }
+            } else if (data.type === 'error') {
+                addToExecutionLog(`Error: ${data.message}`, 'error');
+                
+                // 如果正在执行，标记当前步骤为失败
+                if (isExecuting && currentStepIndex < stepsData.length) {
+                    markStepAsFailed(currentStepIndex, data.message);
+                }
+            } else if (data.type === 'system') {
+                addToExecutionLog(data.message, 'system');
+            }
+        }
+        
+        // 创建新场景
+        function createNewScenario() {
+            scenarioNameInput.value = 'New Scenario';
+            scenarioDescriptionInput.value = 'Scenario description';
+            scenarioStepsContainer.innerHTML = '';
+            
+            // 添加一个初始步骤
+            addNewStep();
+            
+            currentScenario = null;
+            updateStepNumbers();
+            updateScenarioStats();
+        }
+        
+        // 加载场景
+        function loadScenario(scenarioId) {
+            const scenario = predefinedScenarios[scenarioId];
+            if (!scenario) return;
+            
+            // 在实际应用中，这里会加载保存的场景数据
+            scenarioNameInput.value = scenario.name;
+            scenarioDescriptionInput.value = scenario.description;
+            
+            // 为演示目的，我们保留当前步骤，但在实际应用中应该加载场景的步骤
+            currentScenario = scenarioId;
+            
+            // 高亮选中的场景
+            document.querySelectorAll('.scenario-item').forEach(item => {
+                item.classList.remove('bg-primary/10', 'font-medium');
+                if (item.dataset.scenario === scenarioId) {
+                    item.classList.add('bg-primary/10', 'font-medium');
+                }
+            });
+            
+            updateScenarioStats();
+        }
+        
+        // 保存场景
+        function saveScenario() {
+            const scenarioData = {
+                name: scenarioNameInput.value,
+                description: scenarioDescriptionInput.value,
+                steps: collectScenarioSteps()
+            };
+            
+            // 在实际应用中，这里会保存到本地存储或服务器
+            if (!currentScenario) {
+                currentScenario = 'custom-' + Date.now();
+                predefinedScenarios[currentScenario] = scenarioData;
+                
+                // 添加到场景列表
+                const scenarioItem = document.createElement('button');
+                scenarioItem.className = 'scenario-item w-full text-left px-3 py-2 rounded hover:bg-light-bg text-sm transition-colors bg-primary/10 font-medium';
+                scenarioItem.dataset.scenario = currentScenario;
+                scenarioItem.innerHTML = `<i class="fa fa-file-text-o mr-2 text-primary"></i>${scenarioData.name}`;
+                scenariosList.appendChild(scenarioItem);
+            } else {
+                predefinedScenarios[currentScenario] = scenarioData;
+                
+                // 更新场景列表项
+                const scenarioItem = scenariosList.querySelector(`[data-scenario="${currentScenario}"]`);
+                if (scenarioItem) {
+                    scenarioItem.innerHTML = `<i class="fa fa-file-text-o mr-2 text-primary"></i>${scenarioData.name}`;
+                }
+            }
+            
+            addToExecutionLog(`Scenario "${scenarioData.name}" saved successfully`, 'system');
+        }
+        
+        // 删除当前场景
+        function deleteCurrentScenario() {
+            if (!currentScenario || currentScenario.startsWith('new-order')) {
+                addToExecutionLog('Cannot delete predefined scenarios', 'error');
+                return;
+            }
+            
+            if (confirm(`Are you sure you want to delete "${scenarioNameInput.value}"?`)) {
+                // 在实际应用中，这里会从存储中删除
+                delete predefinedScenarios[currentScenario];
+                
+                // 从列表中移除
+                const scenarioItem = scenariosList.querySelector(`[data-scenario="${currentScenario}"]`);
+                if (scenarioItem) {
+                    scenarioItem.remove();
+                }
+                
+                // 创建新场景
+                createNewScenario();
+                
+                addToExecutionLog(`Scenario deleted`, 'system');
+            }
+        }
+        
+        // 收集场景步骤
+        function collectScenarioSteps() {
+            const steps = [];
+            const stepElements = scenarioStepsContainer.querySelectorAll('.scenario-step');
+            
+            stepElements.forEach((element, index) => {
+                const action = element.querySelector('.step-action').value;
+                const stepData = {
+                    action: action,
+                    index: index
+                };
+                
+                if (action === 'send') {
+                    const msgType = element.querySelector('select[id^="message-type-"]').value;
+                    const content = element.querySelector('textarea[id^="message-content-"]').value;
+                    
+                    stepData.messageType = msgType;
+                    stepData.content = content;
+                } else if (action === 'wait') {
+                    const duration = parseInt(element.querySelector('input[type="number"]').value) || 5;
+                    stepData.duration = duration;
+                } else if (action === 'verify') {
+                    const expectedType = element.querySelector('select').value;
+                    const criteria = element.querySelector('textarea').value;
+                    
+                    stepData.expectedType = expectedType;
+                    stepData.criteria = criteria;
+                }
+                
+                steps.push(stepData);
+            });
+            
+            return steps;
+        }
+        
+        // 添加新步骤
+        function addNewStep() {
+            const stepIndex = scenarioStepsContainer.querySelectorAll('.scenario-step').length;
+            
+            // 创建新步骤元素
+            const stepElement = document.createElement('div');
+            stepElement.className = 'scenario-step';
+            stepElement.dataset.stepIndex = stepIndex;
+            
+            // 默认是发送消息步骤
+            stepElement.innerHTML = `
+                <div class="flex justify-between items-center mb-2">
+                    <div class="flex items-center">
+                        <span class="w-6 h-6 rounded-full bg-primary text-white text-xs flex items-center justify-center mr-2">${stepIndex + 1}</span>
+                        <select class="step-action text-sm border-none bg-transparent focus:ring-0 focus:outline-none text-dark">
+                            <option value="send" selected>Send Message</option>
+                            <option value="wait">Wait</option>
+                            <option value="verify">Verify Response</option>
+                        </select>
+                    </div>
+                    <div class="flex space-x-1">
+                        <button class="move-step up text-dark-light hover:text-primary" title="Move up">
+                            <i class="fa fa-chevron-up text-xs"></i>
+                        </button>
+                        <button class="move-step down text-dark-light hover:text-primary" title="Move down">
+                            <i class="fa fa-chevron-down text-xs"></i>
+                        </button>
+                        <button class="delete-step text-dark-light hover:text-danger" title="Delete step">
+                            <i class="fa fa-times text-xs"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="step-parameters">
+                    <select class="w-full mb-2 text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none" id="message-type-${stepIndex}">
+                        <option value="logon">Logon (A)</option>
+                        <option value="logout">Logout (5)</option>
+                        <option value="new-order" selected>New Order (D)</option>
+                        <option value="order-status">Order Status (H)</option>
+                        <option value="execution-report">Execution Report (8)</option>
+                        <option value="heartbeat">Heartbeat (0)</option>
+                        <option value="custom">Custom Message</option>
+                    </select>
+                    <textarea 
+                        id="message-content-${stepIndex}" 
+                        class="w-full h-24 p-2 border border-gray-200 rounded-md font-mono text-xs focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none resize-none scrollbar-thin"
+                    >8=FIX.4.4|9=100|35=D|49=CLIENT1|56=SERVER|34={{seq}}|52={{timestamp}}|11=ORDER{{random}}|21=1|38=100|40=2|44=50.25|54=1|55=AAPL|60={{timestamp}}|10={{checksum}}</textarea>
+                </div>
+            `;
+            
+            scenarioStepsContainer.appendChild(stepElement);
+            updateStepNumbers();
+            updateScenarioStats();
+        }
+        
+        // 删除步骤
+        function deleteStep(index) {
+            const stepElements = scenarioStepsContainer.querySelectorAll('.scenario-step');
+            if (index >= 0 && index < stepElements.length) {
+                stepElements[index].remove();
+                updateStepNumbers();
+                updateScenarioStats();
+            }
+        }
+        
+        // 移动步骤
+        function moveStep(index, direction) {
+            const stepElements = Array.from(scenarioStepsContainer.querySelectorAll('.scenario-step'));
+            const currentIndex = parseInt(index);
+            
+            if (direction === 'up' && currentIndex > 0) {
+                // 上移
+                const targetIndex = currentIndex - 1;
+                scenarioStepsContainer.insertBefore(stepElements[currentIndex], stepElements[targetIndex]);
+            } else if (direction === 'down' && currentIndex < stepElements.length - 1) {
+                // 下移
+                const targetIndex = currentIndex + 1;
+                scenarioStepsContainer.insertBefore(stepElements[targetIndex], stepElements[currentIndex]);
+            }
+            
+            updateStepNumbers();
+        }
+        
+        // 更新步骤编号
+        function updateStepNumbers() {
+            const stepElements = scenarioStepsContainer.querySelectorAll('.scenario-step');
+            stepElements.forEach((element, index) => {
+                element.dataset.stepIndex = index;
+                element.querySelector('.w-6.h-6.rounded-full').textContent = index + 1;
+            });
+        }
+        
+        // 更新步骤参数
+        function updateStepParameters(stepIndex, action) {
+            const stepElement = scenarioStepsContainer.querySelector(`[data-step-index="${stepIndex}"]`);
+            if (!stepElement) return;
+            
+            const parametersContainer = stepElement.querySelector('.step-parameters');
+            
+            // 根据动作类型更新参数
+            if (action === 'send') {
+                parametersContainer.innerHTML = `
+                    <select class="w-full mb-2 text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none" id="message-type-${stepIndex}">
+                        <option value="logon">Logon (A)</option>
+                        <option value="logout">Logout (5)</option>
+                        <option value="new-order" selected>New Order (D)</option>
+                        <option value="order-status">Order Status (H)</option>
+                        <option value="execution-report">Execution Report (8)</option>
+                        <option value="heartbeat">Heartbeat (0)</option>
+                        <option value="custom">Custom Message</option>
+                    </select>
+                    <textarea 
+                        id="message-content-${stepIndex}" 
+                        class="w-full h-24 p-2 border border-gray-200 rounded-md font-mono text-xs focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none resize-none scrollbar-thin"
+                    >${fixTemplates['new-order']}</textarea>
+                `;
+            } else if (action === 'wait') {
+                parametersContainer.innerHTML = `
+                    <div class="flex items-center mb-2">
+                        <label class="text-sm text-dark-light mr-2">Duration:</label>
+                        <input type="number" value="5" min="1" max="60" class="w-16 text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none">
+                        <span class="text-sm text-dark-light ml-1">seconds</span>
+                    </div>
+                `;
+            } else if (action === 'verify') {
+                parametersContainer.innerHTML = `
+                    <label class="text-sm text-dark-light block mb-1">Expected Message Type:</label>
+                    <select class="w-full mb-2 text-sm border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none">
+                        <option value="execution-report" selected>Execution Report (8)</option>
+                        <option value="order-status">Order Status (H)</option>
+                        <option value="reject">Reject (3)</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                    
+                    <label class="text-sm text-dark-light block mb-1">Validation Criteria:</label>
+                    <textarea 
+                        class="w-full h-16 p-2 border border-gray-200 rounded-md font-mono text-xs focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none resize-none scrollbar-thin"
+                        placeholder="35=8|150=2|39=2"
+                    >35=8|150=2|39=2</textarea>
+                `;
+            }
+        }
+        
+        // 更新消息模板
+        function updateMessageTemplate(stepIndex, msgType) {
+            const contentField = document.getElementById(`message-content-${stepIndex}`);
+            if (contentField && fixTemplates[msgType]) {
+                contentField.value = fixTemplates[msgType];
+            }
+        }
+        
+        // 开始场景执行
+        function startScenarioExecution() {
+            if (isExecuting) return;
+            
+            // 检查连接状态
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addToExecutionLog('Not connected to server. Please connect first.', 'error');
+                return;
+            }
+            
+            // 收集场景步骤
+            const steps = collectScenarioSteps();
+            if (steps.length === 0) {
+                addToExecutionLog('Scenario has no steps. Please add steps first.', 'error');
+                return;
+            }
+            
+            // 初始化执行数据
+            isExecuting = true;
+            currentStepIndex = 0;
+            executionStartTime = new Date();
+            stepsData = steps.map(step => ({
+                ...step,
+                status: 'pending',
+                startTime: null,
+                endTime: null,
+                duration: null,
+                result: null
+            }));
+            
+            // 更新UI状态
+            runScenarioBtn.disabled = true;
+            runScenarioBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            stopScenarioBtn.disabled = false;
+            stopScenarioBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            executionStatusIndicator.className = 'w-2 h-2 rounded-full bg-warning mr-2';
+            executionStatusText.textContent = 'Executing...';
+            
+            // 清空之前的执行日志
+            clearExecutionLog();
+            addToExecutionLog(`Starting scenario: ${scenarioNameInput.value}`, 'system');
+            addToExecutionLog(`Total steps to execute: ${steps.length}`, 'system');
+            
+            // 更新统计
+            updateScenarioStats();
+            updateCharts();
+            
+            // 开始执行步骤
+            executeNextStep();
+        }
+        
+        // 执行下一步
+        function executeNextStep() {
+            if (!isExecuting || currentStepIndex >= stepsData.length) {
+                completeScenarioExecution();
+                return;
+            }
+            
+            // 清除之前的执行间隔
+            if (executionInterval) {
+                clearInterval(executionInterval);
+            }
+            
+            const currentStep = stepsData[currentStepIndex];
+            
+            // 更新UI
+            highlightCurrentStep(currentStepIndex);
+            updateProgress();
+            
+            // 记录步骤开始时间
+            currentStep.startTime = new Date();
+            addToExecutionLog(`Executing step ${currentStepIndex + 1}: ${getActionDisplayName(currentStep.action)}`, 'system');
+            
+            // 根据步骤类型执行不同操作
+            if (currentStep.action === 'send') {
+                executeSendStep(currentStep);
+            } else if (currentStep.action === 'wait') {
+                executeWaitStep(currentStep);
+            } else if (currentStep.action === 'verify') {
+                executeVerifyStep(currentStep);
+            }
+        }
+        
+        // 执行发送消息步骤
+        function executeSendStep(step) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                markStepAsFailed(currentStepIndex, 'Not connected to server');
+                return;
+            }
+            
+            try {
+                // 处理模板变量
+                let message = step.content;
+                
+                // 替换时间戳
+                const now = new Date();
+                const timestamp = now.toISOString().replace('T', '-').replace(/\.\d{3}Z$/, '');
+                message = message.replace(/{{timestamp}}/g, timestamp);
+                
+                // 替换随机数
+                const random = Math.floor(Math.random() * 10000);
+                message = message.replace(/{{random}}/g, random);
+                
+                // 简单计算校验和（实际应用中应使用正确的FIX校验和算法）
+                if (message.includes('{{checksum}}')) {
+                    const tempMsg = message.replace('10={{checksum}}', '');
+                    let sum = 0;
+                    for (let i = 0; i < tempMsg.length; i++) {
+                        sum += tempMsg.charCodeAt(i);
+                    }
+                    const checksum = (sum % 256).toString().padStart(3, '0');
+                    message = message.replace('{{checksum}}', checksum);
+                }
+                
+                // 发送消息
+                ws.send(JSON.stringify({
+                    type: 'fix_message',
+                    content: message
+                }));
+                
+                addToExecutionLog(`Sent: ${formatFixMessage(message)}`, 'sent');
+                markStepAsCompleted(currentStepIndex);
+                
+            } catch (error) {
+                markStepAsFailed(currentStepIndex, error.message);
+            }
+        }
+        
+        // 执行等待步骤
+        function executeWaitStep(step) {
+            const durationMs = getAdjustedDuration(step.duration * 1000); // 转换为毫秒并根据速度调整
+            
+            addToExecutionLog(`Waiting for ${(durationMs / 1000).toFixed(1)} seconds...`, 'system');
+            
+            // 设置等待定时器
+            executionInterval = setTimeout(() => {
+                markStepAsCompleted(currentStepIndex);
+            }, durationMs);
+        }
+        
+        // 执行验证步骤
+        function executeVerifyStep(step) {
+            addToExecutionLog(`Waiting for ${step.expectedType} message with criteria: ${step.criteria}`, 'system');
+            
+            // 设置超时定时器
+            const timeoutMs = getAdjustedDuration(30000); // 30秒超时，根据速度调整
+            executionInterval = setTimeout(() => {
+                markStepAsFailed(currentStepIndex, 'Timeout waiting for expected message');
+            }, timeoutMs);
+        }
+        
+        // 验证消息是否符合步骤要求
+        function verifyMessageAgainstStep(message, stepIndex) {
+            if (!isExecuting || stepIndex !== currentStepIndex) return;
+            
+            const step = stepsData[stepIndex];
+            if (step.action !== 'verify') return;
+            
+            // 解析验证条件
+            const criteriaPairs = step.criteria.split('|').reduce((obj, pair) => {
+                const [tag, value] = pair.split('=');
+                if (tag && value) obj[tag] = value;
+                return obj;
+            }, {});
+            
+            // 解析接收到的消息
+            const messagePairs = message.split('|').reduce((obj, pair) => {
+                const [tag, value] = pair.split('=');
+                if (tag && value) obj[tag] = value;
+                return obj;
+            }, {});
+            
+            // 检查所有条件是否满足
+            let allCriteriaMet = true;
+            const failedCriteria = [];
+            
+            Object.entries(criteriaPairs).forEach(([tag, expectedValue]) => {
+                const actualValue = messagePairs[tag];
+                if (actualValue !== expectedValue) {
+                    allCriteriaMet = false;
+                    failedCriteria.push(`Tag ${tag}: expected "${expectedValue}", got "${actualValue}"`);
+                }
+            });
+            
+            // 清除超时定时器
+            if (executionInterval) {
+                clearInterval(executionInterval);
+                executionInterval = null;
+            }
+            
+            // 标记步骤结果
+            if (allCriteriaMet) {
+                markStepAsCompleted(stepIndex, 'All verification criteria met');
+            } else {
+                markStepAsFailed(stepIndex, `Verification failed: ${failedCriteria.join('; ')}`);
+            }
+        }
+        
+        // 标记步骤为已完成
+        function markStepAsCompleted(stepIndex, message = '') {
+            if (stepIndex >= stepsData.length) return;
+            
+            // 更新步骤数据
+            const step = stepsData[stepIndex];
+            step.status = 'completed';
+            step.endTime = new Date();
+            step.duration = step.endTime - step.startTime;
+            step.result = message || 'Success';
+            
+            // 更新UI
+            addToExecutionLog(`Step ${stepIndex + 1} completed ${message ? '- ' + message : ''}`, 'success');
+            
+            // 移动到下一步
+            currentStepIndex++;
+            updateScenarioStats();
+            updateCharts();
+            
+            // 继续执行
+            setTimeout(executeNextStep, getAdjustedDuration(500)); // 短暂延迟
+        }
+        
+        // 标记步骤为失败
+        function markStepAsFailed(stepIndex, errorMessage) {
+            if (stepIndex >= stepsData.length) return;
+            
+            // 更新步骤数据
+            const step = stepsData[stepIndex];
+            step.status = 'failed';
+            step.endTime = new Date();
+            step.duration = step.endTime - step.startTime;
+            step.result = errorMessage;
+            
+            // 更新UI
+            addToExecutionLog(`Step ${stepIndex + 1} failed: ${errorMessage}`, 'error');
+            
+            // 更新统计
+            updateScenarioStats();
+            updateCharts();
+            
+            // 停止执行
+            stopScenarioExecution();
+        }
+        
+        // 完成场景执行
+        function completeScenarioExecution() {
+            isExecuting = false;
+            
+            // 清除定时器
+            if (executionInterval) {
+                clearInterval(executionInterval);
+                executionInterval = null;
+            }
+            
+            // 计算总执行时间
+            const endTime = new Date();
+            const totalDuration = endTime - executionStartTime;
+            
+            // 更新UI
+            const allCompleted = stepsData.every(step => step.status === 'completed');
+            executionStatusIndicator.className = `w-2 h-2 rounded-full ${allCompleted ? 'bg-success' : 'bg-warning'} mr-2`;
+            executionStatusText.textContent = allCompleted ? 'Execution completed successfully' : 'Execution completed with errors';
+            
+            runScenarioBtn.disabled = false;
+            runScenarioBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            stopScenarioBtn.disabled = true;
+            stopScenarioBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            
+            // 更新进度为100%
+            updateProgress(100);
+            
+            // 日志
+            addToExecutionLog(`Scenario execution completed. Total time: ${(totalDuration / 1000).toFixed(2)}s`, 'system');
+            addToExecutionLog(`${stepsData.filter(s => s.status === 'completed').length} steps completed, ${stepsData.filter(s => s.status === 'failed').length} steps failed`, 'system');
+            
+            // 更新图表
+            updateCharts();
+        }
+        
+        // 停止场景执行
+        function stopScenarioExecution() {
+            if (!isExecuting) return;
+            
+            isExecuting = false;
+            
+            // 清除定时器
+            if (executionInterval) {
+                clearInterval(executionInterval);
+                executionInterval = null;
+            }
+            
+            // 更新UI
+            executionStatusIndicator.className = 'w-2 h-2 rounded-full bg-danger mr-2';
+            executionStatusText.textContent = 'Execution stopped';
+            
+            runScenarioBtn.disabled = false;
+            runScenarioBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            stopScenarioBtn.disabled = true;
+            stopScenarioBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            
+            // 日志
+            addToExecutionLog('Scenario execution stopped by user', 'system');
+            
+            // 清除步骤高亮
+            document.querySelectorAll('.scenario-step').forEach(el => {
+                el.classList.remove('scenario-step-active', 'scenario-step-completed', 'scenario-step-error');
+            });
+        }
+        
+        // 更新执行进度
+        function updateProgress(forcedPercentage = null) {
+            const totalSteps = stepsData.length;
+            const percentage = forcedPercentage !== null 
+                ? forcedPercentage 
+                : totalSteps > 0 ? Math.floor((currentStepIndex / totalSteps) * 100) : 0;
+            
+            progressBar.style.width = `${percentage}%`;
+            progressPercentage.textContent = `${percentage}%`;
+        }
+        
+        // 高亮当前步骤
+        function highlightCurrentStep(stepIndex) {
+            // 清除所有高亮
+            document.querySelectorAll('.scenario-step').forEach(el => {
+                el.classList.remove('scenario-step-active', 'scenario-step-completed', 'scenario-step-error');
+            });
+            
+            // 高亮已完成的步骤
+            for (let i = 0; i < stepIndex; i++) {
+                const stepElement = document.querySelector(`[data-step-index="${i}"]`);
+                if (stepElement && stepsData[i]) {
+                    if (stepsData[i].status === 'completed') {
+                        stepElement.classList.add('scenario-step-completed');
+                    } else if (stepsData[i].status === 'failed') {
+                        stepElement.classList.add('scenario-step-error');
+                    }
+                }
+            }
+            
+            // 高亮当前步骤
+            const currentStepElement = document.querySelector(`[data-step-index="${stepIndex}"]`);
+            if (currentStepElement) {
+                currentStepElement.classList.add('scenario-step-active');
+            }
+        }
+        
+        // 更新场景统计
+        function updateScenarioStats() {
+            const totalSteps = scenarioStepsContainer.querySelectorAll('.scenario-step').length;
+            statElements.totalSteps.textContent = totalSteps;
+            
+            if (isExecuting && stepsData.length > 0) {
+                const completedSteps = stepsData.filter(step => step.status === 'completed').length;
+                const failedSteps = stepsData.filter(step => step.status === 'failed').length;
+                
+                statElements.completedSteps.textContent = completedSteps;
+                statElements.failedSteps.textContent = failedSteps;
+                
+                // 更新执行时间
+                if (executionStartTime) {
+                    const now = new Date();
+                    const durationMs = now - executionStartTime;
+                    const seconds = Math.floor(durationMs / 1000) % 60;
+                    const minutes = Math.floor(durationMs / (1000 * 60));
+                    
+                    statElements.executionTime.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                }
+            } else {
+                statElements.completedSteps.textContent = '0';
+                statElements.failedSteps.textContent = '0';
+                statElements.executionTime.textContent = '00:00';
+            }
+        }
+        
+        // 添加到执行日志
+        function addToExecutionLog(message, type) {
+            // 清除初始提示
+            if (executionLog.querySelector('.text-center')) {
+                executionLog.innerHTML = '';
+            }
+            
+            const timestamp = new Date().toLocaleTimeString();
+            const logItem = document.createElement('div');
+            logItem.className = `p-2 rounded-md border ${
+                type === 'sent' ? 'border-primary bg-primary/5' :
+                type === 'received' ? 'border-secondary bg-secondary/5' :
+                type === 'error' ? 'border-danger bg-danger/5' :
+                type === 'success' ? 'border-success bg-success/5' :
+                'border-gray-200 bg-gray-50'
+            }`;
+            
+            logItem.innerHTML = `
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-xs font-medium ${
+                        type === 'sent' ? 'text-primary' :
+                        type === 'received' ? 'text-secondary' :
+                        type === 'error' ? 'text-danger' :
+                        type === 'success' ? 'text-success' : 'text-dark-light'
+                    }">
+                        ${type === 'sent' ? 'Sent' : 
+                          type === 'received' ? 'Received' : 
+                          type === 'error' ? 'Error' :
+                          type === 'success' ? 'Success' : 'System'}
+                    </span>
+                    <span class="text-xs text-dark-light">${timestamp}</span>
+                </div>
+                <div class="text-sm font-mono whitespace-pre-wrap break-all">${message}</div>
+            `;
+            
+            executionLog.appendChild(logItem);
+            executionLog.scrollTop = executionLog.scrollHeight;
+        }
+        
+        // 清空执行日志
+        function clearExecutionLog() {
+            executionLog.innerHTML = `
+                <div class="text-center text-gray-400 py-10">
+                    <i class="fa fa-list-alt text-4xl mb-2 opacity-30"></i>
+                    <p>Execution log will appear here when you run a scenario</p>
+                </div>
+            `;
+        }
+        
+        // 导出执行日志
+        function exportExecutionLog() {
+            if (executionLog.querySelector('.text-center')) {
+                addToExecutionLog('No execution log to export', 'error');
+                return;
+            }
+            
+            // 收集日志内容
+            let logContent = `FIX Scenario Execution Log - ${new Date().toISOString()}\n`;
+            logContent += `Scenario: ${scenarioNameInput.value}\n\n`;
+            
+            executionLog.querySelectorAll('div:not(.text-center)').forEach(item => {
+                const timestamp = item.querySelector('.text-dark-light').textContent;
+                const type = item.querySelector('.font-medium').textContent;
+                const message = item.querySelector('.whitespace-pre-wrap').textContent;
+                
+                logContent += `[${timestamp}] ${type}: ${message}\n`;
+            });
+            
+            // 创建下载
+            const blob = new Blob([logContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `fix-scenario-log-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            addToExecutionLog('Execution log exported successfully', 'system');
+        }
+        
+        // 更新执行速度
+        function updateExecutionSpeed() {
+            // 速度变化会在下一步执行时生效
+            addToExecutionLog(`Execution speed set to ${executionSpeedSelect.options[executionSpeedSelect.selectedIndex].text}`, 'system');
+        }
+        
+        // 根据执行速度调整持续时间
+        function getAdjustedDuration(baseDurationMs) {
+            const speed = executionSpeedSelect.value;
+            
+            switch (speed) {
+                case 'slow': return baseDurationMs * 2;
+                case 'normal': return baseDurationMs;
+                case 'fast': return baseDurationMs / 2;
+                case 'turbo': return baseDurationMs / 4;
+                default: return baseDurationMs;
+            }
+        }
+        
+        // 获取动作的显示名称
+        function getActionDisplayName(action) {
+            const actionNames = {
+                'send': 'Send Message',
+                'wait': 'Wait',
+                'verify': 'Verify Response'
+            };
+            return actionNames[action] || action;
+        }
+        
+        // 格式化FIX消息，高亮标签
+        function formatFixMessage(message) {
+            return message.replace(/(\d+)=/g, '<span class="fix-tag">$1=</span>');
+        }
+        
+        // 更新连接状态
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                statusIndicator.className = 'w-2 h-2 rounded-full bg-success';
+                statusText.textContent = 'Connected';
+                connectBtn.innerHTML = '<i class="fa fa-unplug"></i><span>Disconnect</span>';
+                connectBtn.classList.remove('bg-primary');
+                connectBtn.classList.add('bg-danger');
+            } else {
+                statusIndicator.className = 'w-2 h-2 rounded-full bg-danger';
+                statusText.textContent = 'Disconnected';
+                connectBtn.innerHTML = '<i class="fa fa-plug"></i><span>Connect</span>';
+                connectBtn.classList.remove('bg-danger');
+                connectBtn.classList.add('bg-primary');
+            }
+        }
+        
+        // 页面加载完成后初始化
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
+    
