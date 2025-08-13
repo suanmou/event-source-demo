@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FIX引擎回归测试工具</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    :root {
+      --primary-color: #409EFF;
+      --success-color: #67C23A;
+      --warning-color: #E6A23C;
+      --danger-color: #F56C6C;
+      --bg-color: #f5f7fa;
+      --sidebar-bg: #304156;
+      --header-height: 60px;
+    }
+    
+    body {
+      font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", Arial, sans-serif;
+      background-color: var(--bg-color);
+      color: #333;
+    }
+    
+    #app {
+      display: flex;
+      min-height: 100vh;
+    }
+    
+    .sidebar {
+      width: 260px;
+      background: var(--sidebar-bg);
+      color: #fff;
+      transition: width 0.3s;
+      overflow: hidden;
+    }
+    
+    .app-logo {
+      height: var(--header-height);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .app-logo h1 {
+      font-size: 18px;
+      margin-left: 10px;
+      white-space: nowrap;
+    }
+    
+    .sidebar-menu {
+      padding: 10px 0;
+    }
+    
+    .main-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    
+    .app-header {
+      height: var(--header-height);
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .app-content {
+      flex: 1;
+      padding: 20px;
+      overflow: auto;
+    }
+    
+    .card {
+      background: #fff;
+      border-radius: 4px;
+      box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    
+    .card-header {
+      padding: 15px 20px;
+      border-bottom: 1px solid #ebeef5;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .card-body {
+      padding: 20px;
+    }
+    
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    
+    .status-connected {
+      background: var(--success-color);
+    }
+    
+    .status-disconnected {
+      background: var(--danger-color);
+    }
+    
+    .message-item {
+      border: 1px solid #ebeef5;
+      border-radius: 4px;
+      padding: 12px;
+      margin-bottom: 10px;
+      position: relative;
+    }
+    
+    .message-item:hover {
+      border-color: var(--primary-color);
+    }
+    
+    .message-actions {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    
+    .message-item:hover .message-actions {
+      opacity: 1;
+    }
+    
+    .test-result {
+      margin-top: 20px;
+    }
+    
+    .result-item {
+      padding: 10px;
+      border-left: 4px solid #ddd;
+      margin-bottom: 8px;
+      background: #f8f8f8;
+      border-radius: 2px;
+    }
+    
+    .result-success {
+      border-left-color: var(--success-color);
+      background: rgba(103, 194, 58, 0.1);
+    }
+    
+    .result-failure {
+      border-left-color: var(--danger-color);
+      background: rgba(245, 108, 108, 0.1);
+    }
+    
+    .tag {
+      display: inline-block;
+      padding: 0 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-right: 5px;
+    }
+    
+    .tag-sent {
+      background: rgba(64, 158, 255, 0.1);
+      color: var(--primary-color);
+    }
+    
+    .tag-received {
+      background: rgba(103, 194, 58, 0.1);
+      color: var(--success-color);
+    }
+    
+    .fix-message {
+      font-family: monospace;
+      white-space: pre-wrap;
+      background: #f8f8f8;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+      margin-top: 5px;
+    }
+    
+    .connection-panel {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      background: #f5f7fa;
+      padding: 15px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    
+    .action-button {
+      flex: 1;
+    }
+    
+    .monospace {
+      font-family: monospace;
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: #909399;
+    }
+    
+    .empty-state i {
+      font-size: 50px;
+      margin-bottom: 15px;
+      color: #c0c4cc;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="sidebar">
+      <div class="app-logo">
+        <i class="el-icon-s-tools" style="font-size: 24px;"></i>
+        <h1>FIX引擎测试工具</h1>
+      </div>
+      <div class="sidebar-menu">
+        <el-menu
+          default-active="1"
+          background-color="var(--sidebar-bg)"
+          text-color="#bfcbd9"
+          active-text-color="#409EFF">
+          <el-menu-item index="1">
+            <i class="el-icon-menu"></i>
+            <span>测试场景管理</span>
+          </el-menu-item>
+          <el-menu-item index="2">
+            <i class="el-icon-document"></i>
+            <span>测试结果历史</span>
+          </el-menu-item>
+          <el-menu-item index="3">
+            <i class="el-icon-setting"></i>
+            <span>系统设置</span>
+          </el-menu-item>
+        </el-menu>
+      </div>
+    </div>
+    
+    <div class="main-container">
+      <header class="app-header">
+        <div class="left">
+          <h2>回归测试场景</h2>
+        </div>
+        <div class="right">
+          <el-button type="primary" @click="saveCurrentScene" :disabled="!currentScene.name">
+            <i class="el-icon-document-add"></i> 保存场景
+          </el-button>
+        </div>
+      </header>
+      
+      <div class="app-content">
+        <div class="connection-panel">
+          <el-input v-model="websocketUrl" placeholder="输入WebSocket URL" style="flex: 1;"></el-input>
+          <el-button 
+            type="primary" 
+            @click="connectWebSocket"
+            :loading="connecting"
+            :disabled="isConnected">
+            {{ isConnected ? '已连接' : '连接' }}
+          </el-button>
+          <el-button 
+            type="danger" 
+            @click="disconnectWebSocket"
+            :disabled="!isConnected">
+            断开
+          </el-button>
+          <div>
+            <span class="status-indicator" :class="isConnected ? 'status-connected' : 'status-disconnected'"></span>
+            {{ connectionStatus }}
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <h3>测试场景</h3>
+            <div>
+              <el-select v-model="currentSceneId" placeholder="选择测试场景" @change="loadScene" style="width: 250px; margin-right: 10px;">
+                <el-option
+                  v-for="scene in scenes"
+                  :key="scene.id"
+                  :label="scene.name"
+                  :value="scene.id">
+                </el-option>
+              </el-select>
+              <el-button type="danger" icon="el-icon-delete" @click="deleteScene" :disabled="!currentSceneId"></el-button>
+            </div>
+          </div>
+          <div class="card-body">
+            <el-form label-width="100px">
+              <el-form-item label="场景名称">
+                <el-input v-model="currentScene.name" placeholder="输入场景名称"></el-input>
+              </el-form-item>
+              <el-form-item label="场景描述">
+                <el-input 
+                  v-model="currentScene.description" 
+                  type="textarea" 
+                  :rows="2"
+                  placeholder="输入场景描述">
+                </el-input>
+              </el-form-item>
+            </el-form>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <h3>FIX消息序列</h3>
+            <div>
+              <el-button type="primary" icon="el-icon-plus" @click="addMessage">添加消息</el-button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div v-if="currentScene.messages.length === 0" class="empty-state">
+              <i class="el-icon-chat-line-square"></i>
+              <p>暂无消息，请添加FIX消息序列</p>
+            </div>
+            
+            <div v-for="(msg, index) in currentScene.messages" :key="index" class="message-item">
+              <div class="message-actions">
+                <el-button 
+                  type="danger" 
+                  icon="el-icon-delete" 
+                  circle 
+                  size="mini"
+                  @click="removeMessage(index)">
+                </el-button>
+              </div>
+              <el-form label-width="80px">
+                <el-form-item label="消息类型">
+                  <el-select v-model="msg.type" placeholder="选择消息类型" style="width: 150px;">
+                    <el-option label="NewOrderSingle" value="D"></el-option>
+                    <el-option label="ExecutionReport" value="8"></el-option>
+                    <el-option label="OrderCancel" value="F"></el-option>
+                    <el-option label="Logon" value="A"></el-option>
+                    <el-option label="Logout" value="5"></el-option>
+                    <el-option label="Heartbeat" value="0"></el-option>
+                    <el-option label="TestRequest" value="1"></el-option>
+                    <el-option label="ResendRequest" value="2"></el-option>
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="FIX消息">
+                  <el-input 
+                    v-model="msg.content" 
+                    type="textarea" 
+                    :rows="3"
+                    class="monospace"
+                    placeholder="输入FIX消息，例如: 8=FIX.4.4|9=122|35=D|49=CLIENT|56=SERVER|...">
+                  </el-input>
+                </el-form-item>
+              </el-form>
+            </div>
+          </div>
+        </div>
+        
+        <div class="controls">
+          <el-button 
+            class="action-button"
+            type="primary" 
+            icon="el-icon-video-play" 
+            @click="executeTest"
+            :disabled="!isConnected || currentScene.messages.length === 0"
+            :loading="testing">
+            执行测试
+          </el-button>
+          <el-button 
+            class="action-button"
+            type="info" 
+            icon="el-icon-refresh" 
+            @click="clearResults">
+            清除结果
+          </el-button>
+        </div>
+        
+        <div class="card test-result" v-if="testResults.length > 0">
+          <div class="card-header">
+            <h3>测试结果</h3>
+            <div>
+              <el-tag type="success">通过: {{ passedCount }}</el-tag>
+              <el-tag type="danger" style="margin-left: 10px;">失败: {{ failedCount }}</el-tag>
+            </div>
+          </div>
+          <div class="card-body">
+            <div v-for="(result, index) in testResults" :key="index" class="result-item" :class="result.success ? 'result-success' : 'result-failure'">
+              <div><strong>消息 {{ index + 1 }}:</strong> {{ result.message.type }} ({{ result.success ? '成功' : '失败' }})</div>
+              <div>
+                <span class="tag tag-sent">发送</span>
+                <div class="fix-message">{{ result.message.content }}</div>
+              </div>
+              <div v-if="result.response">
+                <span class="tag tag-received">接收</span>
+                <div class="fix-message">{{ result.response }}</div>
+              </div>
+              <div v-if="result.error" style="color: #f56c6c; margin-top: 5px;">
+                <i class="el-icon-warning"></i> {{ result.error }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          websocketUrl: 'ws://localhost:8080/fix-engine',
+          isConnected: false,
+          connecting: false,
+          connectionStatus: '未连接',
+          ws: null,
+          scenes: [],
+          currentSceneId: null,
+          currentScene: {
+            id: null,
+            name: '',
+            description: '',
+            messages: []
+          },
+          testResults: [],
+          testing: false
+        };
+      },
+      computed: {
+        passedCount() {
+          return this.testResults.filter(r => r.success).length;
+        },
+        failedCount() {
+          return this.testResults.filter(r => !r.success).length;
+        }
+      },
+      created() {
+        this.loadScenes();
+      },
+      methods: {
+        connectWebSocket() {
+          if (this.isConnected) return;
+          
+          this.connecting = true;
+          this.connectionStatus = '连接中...';
+          
+          try {
+            this.ws = new WebSocket(this.websocketUrl);
+            
+            this.ws.onopen = () => {
+              this.isConnected = true;
+              this.connecting = false;
+              this.connectionStatus = '已连接';
+              this.$message.success('WebSocket连接成功');
+            };
+            
+            this.ws.onerror = (error) => {
+              this.connecting = false;
+              this.connectionStatus = '连接失败';
+              this.$message.error(`WebSocket连接错误: ${error}`);
+            };
+            
+            this.ws.onclose = () => {
+              this.isConnected = false;
+              this.connecting = false;
+              this.connectionStatus = '已断开';
+              this.$message.warning('WebSocket连接已关闭');
+            };
+            
+            this.ws.onmessage = (event) => {
+              this.handleResponse(event.data);
+            };
+          } catch (error) {
+            this.connecting = false;
+            this.connectionStatus = '连接错误';
+            this.$message.error(`WebSocket连接异常: ${error.message}`);
+          }
+        },
+        
+        disconnectWebSocket() {
+          if (this.ws) {
+            this.ws.close();
+          }
+        },
+        
+        handleResponse(data) {
+          if (!this.testing) return;
+          
+          // 获取当前正在测试的消息索引
+          const currentIndex = this.testResults.length;
+          
+          if (currentIndex >= this.currentScene.messages.length) {
+            return;
+          }
+          
+          // 简单的验证逻辑 - 实际应用中需要更复杂的验证
+          const success = data.includes('35=' + this.currentScene.messages[currentIndex].type);
+          
+          this.testResults.push({
+            message: this.currentScene.messages[currentIndex],
+            response: data,
+            success: success,
+            error: success ? null : '响应消息类型不匹配'
+          });
+          
+          // 如果还有消息，继续发送
+          if (currentIndex + 1 < this.currentScene.messages.length) {
+            this.sendNextMessage(currentIndex + 1);
+          } else {
+            this.testing = false;
+            this.$message.success('测试执行完成');
+          }
+        },
+        
+        executeTest() {
+          if (!this.isConnected || this.currentScene.messages.length === 0) {
+            return;
+          }
+          
+          this.clearResults();
+          this.testing = true;
+          this.$message.info('开始执行测试...');
+          
+          // 发送第一条消息
+          this.sendNextMessage(0);
+        },
+        
+        sendNextMessage(index) {
+          if (index >= this.currentScene.messages.length) {
+            this.testing = false;
+            return;
+          }
+          
+          const msg = this.currentScene.messages[index];
+          
+          // 在实际应用中，这里可能需要格式化FIX消息
+          // 此处简化处理，直接发送内容
+          this.ws.send(msg.content);
+          
+          // 添加到结果中（等待响应）
+          this.testResults.push({
+            message: msg,
+            response: null,
+            success: false,
+            error: null
+          });
+        },
+        
+        clearResults() {
+          this.testResults = [];
+        },
+        
+        addMessage() {
+          this.currentScene.messages.push({
+            type: 'D',
+            content: ''
+          });
+        },
+        
+        removeMessage(index) {
+          this.currentScene.messages.splice(index, 1);
+        },
+        
+        loadScenes() {
+          const savedScenes = localStorage.getItem('fixTestScenes');
+          if (savedScenes) {
+            try {
+              this.scenes = JSON.parse(savedScenes);
+              if (this.scenes.length > 0) {
+                this.currentSceneId = this.scenes[0].id;
+                this.loadScene();
+              }
+            } catch (e) {
+              console.error('加载测试场景失败:', e);
+            }
+          }
+        },
+        
+        saveScenes() {
+          localStorage.setItem('fixTestScenes', JSON.stringify(this.scenes));
+        },
+        
+        saveCurrentScene() {
+          if (!this.currentScene.name) {
+            this.$message.warning('请输入场景名称');
+            return;
+          }
+          
+          const isNew = !this.currentScene.id;
+          
+          if (isNew) {
+            // 新场景
+            this.currentScene.id = Date.now().toString();
+            this.scenes.push({...this.currentScene});
+          } else {
+            // 更新现有场景
+            const index = this.scenes.findIndex(s => s.id === this.currentScene.id);
+            if (index !== -1) {
+              this.scenes.splice(index, 1, {...this.currentScene});
+            }
+          }
+          
+          this.saveScenes();
+          this.$message.success(`场景已${isNew ? '保存' : '更新'}`);
+          this.currentSceneId = this.currentScene.id;
+        },
+        
+        loadScene() {
+          if (!this.currentSceneId) return;
+          
+          const scene = this.scenes.find(s => s.id === this.currentSceneId);
+          if (scene) {
+            this.currentScene = {
+              id: scene.id,
+              name: scene.name,
+              description: scene.description,
+              messages: [...scene.messages]
+            };
+          } else {
+            this.currentScene = {
+              id: null,
+              name: '',
+              description: '',
+              messages: []
+            };
+          }
+        },
+        
+        deleteScene() {
+          if (!this.currentSceneId) return;
+          
+          this.$confirm('确定要删除这个测试场景吗？', '提示', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            type: 'warning'
+          }).then(() => {
+            const index = this.scenes.findIndex(s => s.id === this.currentSceneId);
+            if (index !== -1) {
+              this.scenes.splice(index, 1);
+              this.saveScenes();
+              
+              if (this.scenes.length > 0) {
+                this.currentSceneId = this.scenes[0].id;
+                this.loadScene();
+              } else {
+                this.currentSceneId = null;
+                this.currentScene = {
+                  id: null,
+                  name: '',
+                  description: '',
+                  messages: []
+                };
+              }
+              
+              this.$message.success('场景已删除');
+            }
+          }).catch(() => {});
+        }
+      }
+    });
+  </script>
+</body>
+</html>
