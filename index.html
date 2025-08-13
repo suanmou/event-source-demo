@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FIX Engine Regression Test Tool</title>
+  <!-- 引入ElementUI样式 -->
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <!-- 引入Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+</head>
+<body>
+  <div id="app">
+    <el-container style="height: 100vh; border: 1px solid #eee;">
+      <!-- 顶部导航栏 -->
+      <el-header style="background-color: #B3C0D1; padding: 0 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; height: 100%;">
+          <div style="font-size: 18px; font-weight: bold;">FIX Engine Regression Test Tool</div>
+          <div>
+            <el-badge :value="connectionStatus ? 'Connected' : 'Disconnected'" :type="connectionStatus ? 'success' : 'danger'" class="item">
+              <el-button icon="el-icon-link" size="mini" @click="toggleConnection">{{ connectionStatus ? 'Disconnect' : 'Connect' }}</el-button>
+            </el-badge>
+            <el-button icon="el-icon-user" size="mini" style="margin-left: 10px;">Admin</el-button>
+          </div>
+        </div>
+      </el-header>
+      
+      <el-container>
+        <!-- 左侧场景列表 -->
+        <el-aside width="250px" style="background-color: #F5F7FA; border-right: 1px solid #eee;">
+          <div style="padding: 10px; border-bottom: 1px solid #eee;">
+            <el-input placeholder="Search scenarios" v-model="searchQuery" size="small" prefix-icon="el-icon-search"></el-input>
+          </div>
+          
+          <div style="padding: 10px; border-bottom: 1px solid #eee;">
+            <el-button type="primary" size="small" icon="el-icon-plus" @click="createNewScenario">New Scenario</el-button>
+          </div>
+          
+          <el-scrollbar style="height: calc(100% - 110px);">
+            <el-tree
+              :data="scenarios"
+              :props="defaultProps"
+              @node-click="handleScenarioClick"
+              :expand-on-click-node="false"
+              :filter-node-method="filterScenario"
+              ref="scenarioTree"
+            >
+              <span class="custom-tree-node" slot-scope="{ node, data }">
+                <span>{{ node.label }}</span>
+                <span>
+                  <el-button
+                    type="text"
+                    size="mini"
+                    @click="() => editScenario(data)"
+                    icon="el-icon-edit"
+                  ></el-button>
+                  <el-button
+                    type="text"
+                    size="mini"
+                    @click="() => deleteScenario(data)"
+                    icon="el-icon-delete"
+                    style="color: #F56C6C;"
+                  ></el-button>
+                  <el-button
+                    type="text"
+                    size="mini"
+                    @click="() => runScenario(data)"
+                    icon="el-icon-play"
+                    style="color: #409EFF;"
+                  ></el-button>
+                </span>
+              </span>
+            </el-tree>
+          </el-scrollbar>
+        </el-aside>
+        
+        <!-- 右侧主内容区 -->
+        <el-main style="padding: 10px;">
+          <el-card v-if="selectedScenario">
+            <div slot="header" style="display: flex; justify-content: space-between; align-items: center;">
+              <h3>{{ selectedScenario.name }}</h3>
+              <div>
+                <el-button type="primary" size="small" @click="saveScenario" icon="el-icon-save">Save</el-button>
+                <el-button type="success" size="small" @click="runScenario(selectedScenario)" icon="el-icon-play" style="margin-left: 10px;">Run</el-button>
+              </div>
+            </div>
+            
+            <el-form ref="scenarioForm" :model="selectedScenario" label-width="80px">
+              <el-form-item label="Name">
+                <el-input v-model="selectedScenario.name"></el-input>
+              </el-form-item>
+              <el-form-item label="Description">
+                <el-input type="textarea" v-model="selectedScenario.description" rows="2"></el-input>
+              </el-form-item>
+            </el-form>
+            
+            <div style="margin-top: 20px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h4>FIX Messages</h4>
+                <el-button type="primary" size="small" @click="addNewMessage" icon="el-icon-plus">Add Message</el-button>
+              </div>
+              
+              <el-table
+                :data="selectedScenario.messages"
+                border
+                style="width: 100%; margin-bottom: 10px;"
+              >
+                <el-table-column
+                  prop="sequence"
+                  label="Seq"
+                  width="50"
+                ></el-table-column>
+                <el-table-column
+                  prop="type"
+                  label="Type"
+                  width="100"
+                ></el-table-column>
+                <el-table-column
+                  prop="description"
+                  label="Description"
+                ></el-table-column>
+                <el-table-column
+                  label="Actions"
+                  width="150"
+                >
+                  <template slot-scope="scope">
+                    <el-button
+                      type="text"
+                      size="small"
+                      @click="editMessage(scope.row)"
+                      icon="el-icon-edit"
+                    ></el-button>
+                    <el-button
+                      type="text"
+                      size="small"
+                      @click="removeMessage(scope.$index)"
+                      icon="el-icon-delete"
+                      style="color: #F56C6C;"
+                    ></el-button>
+                    <el-button
+                      type="text"
+                      size="small"
+                      @click="moveMessage(scope.$index, 'up')"
+                      icon="el-icon-top"
+                      :disabled="scope.$index === 0"
+                    ></el-button>
+                    <el-button
+                      type="text"
+                      size="small"
+                      @click="moveMessage(scope.$index, 'down')"
+                      icon="el-icon-bottom"
+                      :disabled="scope.$index === selectedScenario.messages.length - 1"
+                    ></el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </el-card>
+          
+          <el-card v-else>
+            <div style="text-align: center; padding: 50px; color: #909399;">
+              <i class="el-icon-file-text" style="font-size: 48px; margin-bottom: 20px;"></i>
+              <p>Select or create a test scenario to get started</p>
+            </div>
+          </el-card>
+          
+          <!-- 执行结果区域 -->
+          <el-card style="margin-top: 10px;">
+            <div slot="header" style="display: flex; justify-content: space-between; align-items: center;">
+              <h3>Execution Results</h3>
+              <el-button type="warning" size="small" @click="clearResults" icon="el-icon-delete">Clear</el-button>
+            </div>
+            <el-scrollbar style="height: 300px; border: 1px solid #eee; border-radius: 4px; padding: 10px;">
+              <div v-for="(log, index) in executionLogs" :key="index" class="log-entry" :class="log.type">
+                <span class="log-time">{{ log.timestamp }}</span>
+                <span class="log-content">{{ log.message }}</span>
+              </div>
+            </el-scrollbar>
+          </el-card>
+        </el-main>
+      </el-container>
+    </el-container>
+    
+    <!-- 消息编辑对话框 -->
+    <el-dialog
+      title="Edit FIX Message"
+      :visible.sync="messageDialogVisible"
+      width="70%"
+    >
+      <el-form ref="messageForm" :model="currentMessage" label-width="100px">
+        <el-form-item label="Message Type">
+          <el-select v-model="currentMessage.type" placeholder="Select message type">
+            <el-option label="NewOrderSingle" value="D"></el-option>
+            <el-option label="OrderCancelRequest" value="F"></el-option>
+            <el-option label="OrderCancelReplaceRequest" value="G"></el-option>
+            <el-option label="OrderStatusRequest" value="H"></el-option>
+            <el-option label="ExecutionReport" value="8"></el-option>
+            <el-option label="Logon" value="A"></el-option>
+            <el-option label="Logout" value="5"></el-option>
+            <el-option label="Heartbeat" value="0"></el-option>
+            <el-option label="TestRequest" value="1"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Description">
+          <el-input v-model="currentMessage.description"></el-input>
+        </el-form-item>
+        <el-form-item label="FIX Message">
+          <el-input type="textarea" v-model="currentMessage.content" rows="10" placeholder="Enter FIX message in tag=value format, separated by SOH (ASCII 1)"></el-input>
+          <div style="margin-top: 10px; font-size: 12px; color: #606266;">
+            Example: 8=FIX.4.4|9=123|35=D|...|10=123 (use | as SOH separator for editing)
+          </div>
+        </el-form-item>
+        <el-form-item label="Delay (ms)">
+          <el-input-number v-model="currentMessage.delay" :min="0" :step="100" size="small"></el-input-number>
+        </el-form-item>
+      </el-form>
+      <div slot="footer" class="dialog-footer">
+        <el-button @click="messageDialogVisible = false">Cancel</el-button>
+        <el-button type="primary" @click="saveMessage">Save</el-button>
+      </div>
+    </el-dialog>
+    
+    <!-- 场景执行进度对话框 -->
+    <el-dialog
+      title="Executing Scenario"
+      :visible.sync="executionDialogVisible"
+      width="50%"
+      :close-on-click-modal="false"
+    >
+      <div style="text-align: center; padding: 20px 0;">
+        <el-progress :percentage="executionProgress" stroke-width="8"></el-progress>
+        <p style="margin-top: 20px;">{{ executionStatus }}</p>
+      </div>
+      <div slot="footer" class="dialog-footer">
+        <el-button v-if="isExecuting" type="danger" @click="stopExecution">Stop</el-button>
+        <el-button v-else @click="executionDialogVisible = false">Close</el-button>
+      </div>
+    </el-dialog>
+  </div>
+
+  <!-- 引入Vue2 -->
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <!-- 引入ElementUI -->
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          // WebSocket连接状态
+          connectionStatus: false,
+          webSocket: null,
+          wsUrl: 'ws://localhost:8080/ws',
+          
+          // 场景数据
+          scenarios: [],
+          selectedScenario: null,
+          searchQuery: '',
+          defaultProps: {
+            children: 'children',
+            label: 'name'
+          },
+          
+          // 消息编辑相关
+          messageDialogVisible: false,
+          currentMessage: {
+            id: '',
+            sequence: 0,
+            type: '',
+            description: '',
+            content: '',
+            delay: 0
+          },
+          editingMessageIndex: -1,
+          
+          // 执行相关
+          executionLogs: [],
+          executionDialogVisible: false,
+          executionProgress: 0,
+          executionStatus: '',
+          isExecuting: false
+        };
+      },
+      created() {
+        // 加载示例场景
+        this.loadScenarios();
+      },
+      watch: {
+        searchQuery(val) {
+          this.$refs.scenarioTree.filter(val);
+        }
+      },
+      methods: {
+        // WebSocket连接管理
+        toggleConnection() {
+          if (this.connectionStatus) {
+            this.closeWebSocket();
+          } else {
+            this.openWebSocket();
+          }
+        },
+        
+        openWebSocket() {
+          try {
+            this.webSocket = new WebSocket(this.wsUrl);
+            
+            this.webSocket.onopen = () => {
+              this.connectionStatus = true;
+              this.addExecutionLog('WebSocket connection established', 'info');
+            };
+            
+            this.webSocket.onmessage = (event) => {
+              try {
+                const data = JSON.parse(event.data);
+                this.handleWebSocketMessage(data);
+              } catch (e) {
+                this.addExecutionLog(`Received message: ${event.data}`, 'info');
+              }
+            };
+            
+            this.webSocket.onerror = (error) => {
+              this.addExecutionLog(`WebSocket error: ${error}`, 'error');
+              this.connectionStatus = false;
+            };
+            
+            this.webSocket.onclose = () => {
+              this.connectionStatus = false;
+              this.addExecutionLog('WebSocket connection closed', 'warning');
+            };
+          } catch (e) {
+            this.addExecutionLog(`Failed to connect: ${e}`, 'error');
+          }
+        },
+        
+        closeWebSocket() {
+          if (this.webSocket) {
+            this.webSocket.close();
+            this.webSocket = null;
+          }
+        },
+        
+        handleWebSocketMessage(message) {
+          if (message.type === 'execution_result') {
+            this.addExecutionLog(`Received: ${message.content}`, 'success');
+          } else if (message.type === 'execution_error') {
+            this.addExecutionLog(`Error: ${message.content}`, 'error');
+          } else if (message.type === 'execution_progress') {
+            this.updateExecutionProgress(message.progress, message.status);
+          } else {
+            this.addExecutionLog(`Message: ${JSON.stringify(message)}`, 'info');
+          }
+        },
+        
+        sendWebSocketMessage(message) {
+          if (this.connectionStatus && this.webSocket) {
+            this.webSocket.send(JSON.stringify(message));
+            return true;
+          }
+          this.addExecutionLog('Not connected to WebSocket', 'error');
+          return false;
+        },
+        
+        // 场景管理
+        loadScenarios() {
+          // 实际应用中，这里会是API调用
+          this.scenarios = [
+            {
+              id: '1',
+              name: 'New Order Flow',
+              description: 'Test basic new order workflow',
+              messages: [
+                {
+                  id: '1-1',
+                  sequence: 1,
+                  type: 'A',
+                  description: 'Logon message',
+                  content: '8=FIX.4.4|9=70|35=A|34=1|49=TESTCLIENT|52=20230101-12:00:00|56=TESTSERVER|98=0|108=30|10=123',
+                  delay: 0
+                },
+                {
+                  id: '1-2',
+                  sequence: 2,
+                  type: 'D',
+                  description: 'New Order Single',
+                  content: '8=FIX.4.4|9=100|35=D|34=2|49=TESTCLIENT|52=20230101-12:00:01|56=TESTSERVER|11=ORDER123|21=1|38=100|40=1|54=1|55=AAPL|60=20230101-12:00:01|10=123',
+                  delay: 1000
+                }
+              ]
+            },
+            {
+              id: '2',
+              name: 'Order Cancel Flow',
+              description: 'Test order creation and cancellation',
+              messages: [
+                {
+                  id: '2-1',
+                  sequence: 1,
+                  type: 'A',
+                  description: 'Logon message',
+                  content: '8=FIX.4.4|9=70|35=A|34=1|49=TESTCLIENT|52=20230101-12:00:00|56=TESTSERVER|98=0|108=30|10=123',
+                  delay: 0
+                },
+                {
+                  id: '2-2',
+                  sequence: 2,
+                  type: 'D',
+                  description: 'New Order Single',
+                  content: '8=FIX.4.4|9=100|35=D|34=2|49=TESTCLIENT|52=20230101-12:00:01|56=TESTSERVER|11=ORDER456|21=1|38=100|40=1|54=1|55=MSFT|60=20230101-12:00:01|10=123',
+                  delay: 1000
+                },
+                {
+                  id: '2-3',
+                  sequence: 3,
+                  type: 'F',
+                  description: 'Order Cancel Request',
+                  content: '8=FIX.4.4|9=100|35=F|34=3|49=TESTCLIENT|52=20230101-12:00:03|56=TESTSERVER|11=ORDER456|41=ORDER456|54=1|55=MSFT|60=20230101-12:00:03|10=123',
+                  delay: 2000
+                }
+              ]
+            }
+          ];
+        },
+        
+        filterScenario(value, data) {
+          if (!value) return true;
+          return data.name.toLowerCase().includes(value.toLowerCase());
+        },
+        
+        handleScenarioClick(data) {
+          // 创建深拷贝以避免在保存前修改原始数据
+          this.selectedScenario = JSON.parse(JSON.stringify(data));
+        },
+        
+        createNewScenario() {
+          const newId = (this.scenarios.length + 1).toString();
+          const newScenario = {
+            id: newId,
+            name: `New Scenario ${newId}`,
+            description: '',
+            messages: []
+          };
+          this.scenarios.push(newScenario);
+          this.handleScenarioClick(newScenario);
+        },
+        
+        editScenario(data) {
+          this.handleScenarioClick(data);
+        },
+        
+        deleteScenario(data) {
+          this.$confirm(`Are you sure you want to delete ${data.name}?`, 'Confirm', {
+            confirmButtonText: 'Yes',
+            cancelButtonText: 'No',
+            type: 'warning'
+          }).then(() => {
+            const index = this.scenarios.findIndex(scenario => scenario.id === data.id);
+            if (index !== -1) {
+              this.scenarios.splice(index, 1);
+              if (this.selectedScenario && this.selectedScenario.id === data.id) {
+                this.selectedScenario = null;
+              }
+              this.$message({
+                type: 'success',
+                message: 'Scenario deleted successfully'
+              });
+            }
+          }).catch(() => {
+            this.$message({
+              type: 'info',
+              message: 'Deletion cancelled'
+            });
+          });
+        },
+        
+        saveScenario() {
+          if (!this.selectedScenario) return;
+          
+          const index = this.scenarios.findIndex(scenario => scenario.id === this.selectedScenario.id);
+          if (index !== -1) {
+            this.scenarios[index] = JSON.parse(JSON.stringify(this.selectedScenario));
+            this.$message({
+              type: 'success',
+              message: 'Scenario saved successfully'
+            });
+          }
+        },
+        
+        // 消息管理
+        addNewMessage() {
+          if (!this.selectedScenario) {
+            this.$message.warning('Please select a scenario first');
+            return;
+          }
+          
+          const newMessageId = `${this.selectedScenario.id}-${this.selectedScenario.messages.length + 1}`;
+          this.currentMessage = {
+            id: newMessageId,
+            sequence: this.selectedScenario.messages.length + 1,
+            type: '',
+            description: '',
+            content: '',
+            delay: 0
+          };
+          this.editingMessageIndex = -1;
+          this.messageDialogVisible = true;
+        },
+        
+        editMessage(message) {
+          this.editingMessageIndex = this.selectedScenario.messages.findIndex(m => m.id === message.id);
+          // 显示时将SOH字符替换为|以便编辑
+          message.content = message.content.replace(/\x01/g, '|');
+          this.currentMessage = JSON.parse(JSON.stringify(message));
+          this.messageDialogVisible = true;
+        },
+        
+        saveMessage() {
+          if (!this.selectedScenario) return;
+          
+          // 保存前将|替换为实际的SOH字符(ASCII 1)
+          this.currentMessage.content = this.currentMessage.content.replace(/\|/g, String.fromCharCode(1));
+          
+          if (this.editingMessageIndex !== -1) {
+            this.selectedScenario.messages[this.editingMessageIndex] = JSON.parse(JSON.stringify(this.currentMessage));
+          } else {
+            this.selectedScenario.messages.push(JSON.parse(JSON.stringify(this.currentMessage)));
+          }
+          
+          // 更新序号
+          this.selectedScenario.messages.forEach((msg, index) => {
+            msg.sequence = index + 1;
+          });
+          
+          this.messageDialogVisible = false;
+          this.$message({
+            type: 'success',
+            message: 'Message saved successfully'
+          });
+        },
+        
+        removeMessage(index) {
+          this.selectedScenario.messages.splice(index, 1);
+          
+          // 更新序号
+          this.selectedScenario.messages.forEach((msg, idx) => {
+            msg.sequence = idx + 1;
+          });
+          
+          this.$message({
+            type: 'info',
+            message: 'Message removed'
+          });
+        },
+        
+        moveMessage(index, direction) {
+          if (direction === 'up' && index > 0) {
+            [this.selectedScenario.messages[index], this.selectedScenario.messages[index - 1]] = 
+            [this.selectedScenario.messages[index - 1], this.selectedScenario.messages[index]];
+          } else if (direction === 'down' && index < this.selectedScenario.messages.length - 1) {
+            [this.selectedScenario.messages[index], this.selectedScenario.messages[index + 1]] = 
+            [this.selectedScenario.messages[index + 1], this.selectedScenario.messages[index]];
+          }
+          
+          // 更新序号
+          this.selectedScenario.messages.forEach((msg, idx) => {
+            msg.sequence = idx + 1;
+          });
+        },
+        
+        // 执行管理
+        runScenario(scenario) {
+          if (!this.connectionStatus) {
+            this.$message.error('Please connect to WebSocket first');
+            return;
+          }
+          
+          this.executionProgress = 0;
+          this.executionStatus = 'Starting execution...';
+          this.executionDialogVisible = true;
+          this.isExecuting = true;
+          
+          // 清除之前的执行日志
+          this.executionLogs = [];
+          this.addExecutionLog(`Starting scenario: ${scenario.name}`, 'info');
+          
+          // 发送执行请求到服务器
+          const success = this.sendWebSocketMessage({
+            type: 'execute_scenario',
+            scenario: scenario
+          });
+          
+          if (!success) {
+            this.stopExecution();
+          }
+        },
+        
+        stopExecution() {
+          this.sendWebSocketMessage({
+            type: 'stop_execution'
+          });
+          
+          this.isExecuting = false;
+          this.executionStatus = 'Execution stopped';
+          this.addExecutionLog('Execution stopped by user', 'warning');
+        },
+        
+        updateExecutionProgress(progress, status) {
+          this.executionProgress = progress;
+          this.executionStatus = status;
+          
+          if (progress === 100) {
+            this.isExecuting = false;
+            this.addExecutionLog('Scenario execution completed', 'success');
+          }
+        },
+        
+        addExecutionLog(message, type = 'info') {
+          const timestamp = new Date().toISOString().split('T')[1].slice(0, 12); // HH:mm:ss.sss
+          this.executionLogs.push({
+            timestamp: timestamp,
+            message: message,
+            type: type
+          });
+          
+          // 自动滚动到底部
+          this.$nextTick(() => {
+            const scrollbar = this.$el.querySelector('.el-scrollbar__wrap');
+            scrollbar.scrollTop = scrollbar.scrollHeight;
+          });
+        },
+        
+        clearResults() {
+          this.executionLogs = [];
+        }
+      }
+    });
+  </script>
+  
+  <style>
+    .log-entry {
+      margin-bottom: 5px;
+      padding: 5px;
+      border-radius: 3px;
+    }
+    
+    .log-entry.info {
+      background-color: #f0f9eb;
+      border-left: 3px solid #52c41a;
+    }
+    
+    .log-entry.success {
+      background-color: #e6f7ff;
+      border-left: 3px solid #1890ff;
+    }
+    
+    .log-entry.warning {
+      background-color: #fffbe6;
+      border-left: 3px solid #faad14;
+    }
+    
+    .log-entry.error {
+      background-color: #fff2f0;
+      border-left: 3px solid #f5222d;
+    }
+    
+    .log-time {
+      font-weight: bold;
+      margin-right: 10px;
+      color: #666;
+    }
+    
+    .custom-tree-node {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 14px;
+      padding-right: 8px;
+    }
+  </style>
+</body>
+</html>
