@@ -1,0 +1,29 @@
+{
+  "threadGroups": [
+    {
+      "name": "登录压力测试",
+      "threads": 50,
+      "iterations": 10,
+      "rampUp": 30,
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://api.example.com/login",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "username": "testuser",
+            "password": "testpass"
+          },
+          "timeout": 3000
+        },
+        {
+          "method": "GET",
+          "url": "http://api.example.com/profile",
+          "timeout": 2000
+        }
+      ]
+    }
+  ]
+}
