@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>服务健康监控面板</title>
+  <!-- 引入Element UI样式 -->
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      background-color: #f5f7fa;
+      color: #333;
+    }
+    .monitor-container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid #ebeef5;
+    }
+    .filter-area {
+      background: #fff;
+      padding: 20px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+    }
+    .status-overview {
+      display: flex;
+      margin-bottom: 20px;
+    }
+    .status-card {
+      flex: 1;
+      margin: 0 10px;
+      text-align: center;
+      padding: 15px;
+      border-radius: 4px;
+      color: #fff;
+    }
+    .status-card:first-child {
+      margin-left: 0;
+    }
+    .status-card:last-child {
+      margin-right: 0;
+    }
+    .status-card.healthy {
+      background: linear-gradient(60deg, #66bb6a, #43a047);
+    }
+    .status-card.warning {
+      background: linear-gradient(60deg, #ffa726, #fb8c00);
+    }
+    .status-card.critical {
+      background: linear-gradient(60deg, #ef5350, #e53935);
+    }
+    .status-card.unknown {
+      background: linear-gradient(60deg, #bdbdbd, #9e9e9e);
+    }
+    .status-card h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    .status-card .count {
+      font-size: 28px;
+      font-weight: bold;
+    }
+    .service-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 20px;
+    }
+    .service-card {
+      background: #fff;
+      border-radius: 4px;
+      overflow: hidden;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      transition: all 0.3s;
+    }
+    .service-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 6px 16px 0 rgba(0, 0, 0, 0.2);
+    }
+    .service-header {
+      padding: 15px;
+      border-left: 4px solid;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .service-header.healthy {
+      border-color: #67c23a;
+      background: #f0f9eb;
+    }
+    .service-header.warning {
+      border-color: #e6a23c;
+      background: #fdf6ec;
+    }
+    .service-header.critical {
+      border-color: #f56c6c;
+      background: #fef0f0;
+    }
+    .service-header.unknown {
+      border-color: #909399;
+      background: #f4f4f5;
+    }
+    .service-title {
+      font-weight: bold;
+      font-size: 16px;
+    }
+    .service-status {
+      padding: 4px 10px;
+      border-radius: 12px;
+      color: #fff;
+      font-size: 12px;
+    }
+    .status-healthy {
+      background: #67c23a;
+    }
+    .status-warning {
+      background: #e6a23c;
+    }
+    .status-critical {
+      background: #f56c6c;
+    }
+    .status-unknown {
+      background: #909399;
+    }
+    .nodes-list {
+      padding: 10px 15px;
+    }
+    .node-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #ebeef5;
+    }
+    .node-item:last-child {
+      border-bottom: none;
+    }
+    .node-info {
+      flex: 1;
+    }
+    .node-host {
+      color: #909399;
+      font-size: 12px;
+    }
+    .node-actions {
+      display: flex;
+      align-items: center;
+    }
+    .last-updated {
+      text-align: center;
+      margin-top: 20px;
+      color: #909399;
+      font-size: 13px;
+    }
+    .log-dialog .el-dialog__body {
+      padding: 10px 20px;
+    }
+    .log-content {
+      font-family: monospace;
+      background: #2d2d2d;
+      color: #f1f1f1;
+      padding: 15px;
+      border-radius: 4px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .timestamp {
+      color: #909399;
+      font-size: 12px;
+      margin-right: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="monitor-container">
+    <!-- 顶部标题和刷新按钮 -->
+    <div class="header">
+      <h1>服务健康监控面板</h1>
+      <el-button type="primary" icon="el-icon-refresh" @click="refreshData">刷新数据</el-button>
+    </div>
+
+    <!-- 筛选区域 -->
+    <div class="filter-area">
+      <el-row :gutter="20">
+        <el-col :span="8">
+          <el-input v-model="searchQuery" placeholder="搜索服务名称或主机" clearable>
+            <template slot="prepend">搜索</template>
+          </el-input>
+        </el-col>
+        <el-col :span="8">
+          <el-select v-model="statusFilter" placeholder="按状态筛选" clearable>
+            <el-option label="健康" value="healthy"></el-option>
+            <el-option label="警告" value="warning"></el-option>
+            <el-option label="异常" value="critical"></el-option>
+            <el-option label="未知" value="unknown"></el-option>
+          </el-select>
+        </el-col>
+        <el-col :span="8">
+          <el-button type="primary" icon="el-icon-search" @click="applyFilters">应用筛选</el-button>
+          <el-button @click="resetFilters">重置</el-button>
+        </el-col>
+      </el-row>
+    </div>
+
+    <!-- 状态概览 -->
+    <div class="status-overview">
+      <div class="status-card healthy">
+        <h3>健康服务</h3>
+        <div class="count">{{ statusCount.healthy }}</div>
+      </div>
+      <div class="status-card warning">
+        <h3>警告服务</h3>
+        <div class="count">{{ statusCount.warning }}</div>
+      </div>
+      <div class="status-card critical">
+        <h3>异常服务</h3>
+        <div class="count">{{ statusCount.critical }}</div>
+      </div>
+      <div class="status-card unknown">
+        <h3>未知状态</h3>
+        <div class="count">{{ statusCount.unknown }}</div>
+      </div>
+    </div>
+
+    <!-- 服务卡片列表 -->
+    <div class="service-cards">
+      <div v-for="service in filteredServices" :key="service.id" class="service-card">
+        <div :class="['service-header', service.status]">
+          <div class="service-title">{{ service.name }}</div>
+          <div :class="['service-status', `status-${service.status}`]">
+            {{ getStatusText(service.status) }}
+          </div>
+        </div>
+        <div class="nodes-list">
+          <div v-for="node in service.nodes" :key="node.id" class="node-item">
+            <div class="node-info">
+              <div>{{ node.name }}</div>
+              <div class="node-host">{{ node.host }}</div>
+            </div>
+            <div class="node-actions">
+              <span :class="`status-${node.status}`" style="margin-right: 10px;">
+                {{ getStatusText(node.status) }}
+              </span>
+              <el-button size="mini" @click="showLogs(service, node)">查看日志</el-button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 最后更新时间 -->
+    <div class="last-updated">
+      最后更新: {{ lastUpdated }}
+    </div>
+
+    <!-- 日志对话框 -->
+    <el-dialog :title="`${currentService.name} - ${currentNode.name} 日志`" :visible.sync="logDialogVisible" width="70%" class="log-dialog">
+      <div class="log-content">
+        <div v-for="(log, index) in currentLogs" :key="index" class="log-entry">
+          <span class="timestamp">[{{ log.timestamp }}]</span>
+          <span :class="`log-level-${log.level}`">{{ log.message }}</span>
+        </div>
+      </div>
+      <span slot="footer" class="dialog-footer">
+        <el-button type="primary" @click="logDialogVisible = false">关闭</el-button>
+      </span>
+    </el-dialog>
+  </div>
+
+  <!-- 引入Vue和Element UI -->
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          services: [],
+          searchQuery: '',
+          statusFilter: '',
+          lastUpdated: new Date().toLocaleString(),
+          logDialogVisible: false,
+          currentService: {},
+          currentNode: {},
+          currentLogs: [],
+          statusCount: {
+            healthy: 0,
+            warning: 0,
+            critical: 0,
+            unknown: 0
+          }
+        }
+      },
+      computed: {
+        filteredServices() {
+          let filtered = this.services;
+          
+          // 状态筛选
+          if (this.statusFilter) {
+            filtered = filtered.filter(service => service.status === this.statusFilter);
+          }
+          
+          // 搜索筛选
+          if (this.searchQuery) {
+            const query = this.searchQuery.toLowerCase();
+            filtered = filtered.filter(service => 
+              service.name.toLowerCase().includes(query) ||
+              service.nodes.some(node => node.host.toLowerCase().includes(query))
+            );
+          }
+          
+          return filtered;
+        }
+      },
+      mounted() {
+        this.generateMockData();
+        this.updateStatusCount();
+        
+        // 模拟实时更新：每30秒更新一次数据
+        setInterval(() => {
+          this.updateData();
+        }, 30000);
+      },
+      methods: {
+        generateMockData() {
+          // 模拟服务数据
+          const services = [
+            { id: 1, name: '用户服务', status: 'healthy' },
+            { id: 2, name: '订单服务', status: 'warning' },
+            { id: 3, name: '支付服务', status: 'critical' },
+            { id: 4, name: '商品服务', status: 'healthy' },
+            { id: 5, name: '库存服务', status: 'unknown' },
+            { id: 6, name: '消息服务', status: 'healthy' },
+            { id: 7, name: '搜索服务', status: 'warning' },
+            { id: 8, name: '推荐服务', status: 'healthy' }
+          ];
+          
+          // 为每个服务添加节点
+          const hosts = [
+            '192.168.1.101', '192.168.1.102', '192.168.1.103',
+            '192.168.1.104', '192.168.1.105', '192.168.1.106'
+          ];
+          
+          const statuses = ['healthy', 'warning', 'critical', 'unknown'];
+          
+          this.services = services.map(service => {
+            const nodeCount = Math.floor(Math.random() * 3) + 1; // 1-3个节点
+            const nodes = [];
+            
+            for (let i = 1; i <= nodeCount; i++) {
+              const randomStatus = statuses[Math.floor(Math.random() * statuses.length)];
+              nodes.push({
+                id: `${service.id}-${i}`,
+                name: `节点 ${i}`,
+                host: hosts[Math.floor(Math.random() * hosts.length)],
+                status: service.status === 'unknown' ? 'unknown' : randomStatus
+              });
+            }
+            
+            return { ...service, nodes };
+          });
+        },
+        updateData() {
+          // 模拟数据更新：随机改变一些服务的状态
+          this.services.forEach(service => {
+            if (Math.random() > 0.7) { // 30%的概率改变状态
+              const statuses = ['healthy', 'warning', 'critical', 'unknown'];
+              const newStatus = statuses[Math.floor(Math.random() * statuses.length)];
+              service.status = newStatus;
+              
+              // 同时更新节点的状态
+              service.nodes.forEach(node => {
+                if (Math.random() > 0.5) { // 50%的概率改变节点状态
+                  node.status = statuses[Math.floor(Math.random() * statuses.length)];
+                }
+              });
+            }
+          });
+          
+          this.lastUpdated = new Date().toLocaleString();
+          this.updateStatusCount();
+          
+          this.$message({
+            message: '数据已更新',
+            type: 'success',
+            duration: 2000
+          });
+        },
+        updateStatusCount() {
+          // 重置计数器
+          this.statusCount = {
+            healthy: 0,
+            warning: 0,
+            critical: 0,
+            unknown: 0
+          };
+          
+          // 统计各状态的服务数量
+          this.services.forEach(service => {
+            if (this.statusCount.hasOwnProperty(service.status)) {
+              this.statusCount[service.status]++;
+            }
+          });
+        },
+        refreshData() {
+          this.generateMockData();
+          this.updateStatusCount();
+          this.lastUpdated = new Date().toLocaleString();
+          
+          this.$message({
+            message: '数据已刷新',
+            type: 'success',
+            duration: 2000
+          });
+        },
+        applyFilters() {
+          // 筛选逻辑在computed属性中处理
+          this.$message({
+            message: '筛选条件已应用',
+            type: 'info',
+            duration: 2000
+          });
+        },
+        resetFilters() {
+          this.searchQuery = '';
+          this.statusFilter = '';
+          
+          this.$message({
+            message: '筛选条件已重置',
+            type: 'info',
+            duration: 2000
+          });
+        },
+        getStatusText(status) {
+          const statusMap = {
+            healthy: '健康',
+            warning: '警告',
+            critical: '异常',
+            unknown: '未知'
+          };
+          return statusMap[status] || '未知';
+        },
+        showLogs(service, node) {
+          this.currentService = service;
+          this.currentNode = node;
+          
+          // 生成模拟日志数据
+          this.currentLogs = [
+            { timestamp: new Date().toLocaleTimeString(), level: 'info', message: '服务启动成功' },
+            { timestamp: new Date(Date.now() - 60000).toLocaleTimeString(), level: 'info', message: '处理用户请求: GET /api/data' },
+            { timestamp: new Date(Date.now() - 120000).toLocaleTimeString(), level: 'warning', message: '高内存使用率: 85%' },
+            { timestamp: new Date(Date.now() - 180000).toLocaleTimeString(), level: 'info', message: '数据库连接池初始化完成' },
+            { timestamp: new Date(Date.now() - 240000).toLocaleTimeString(), level: 'error', message: '数据库查询超时' }
+          ];
+          
+          this.logDialogVisible = true;
+        }
+      }
+    });
+  </script>
+</body>
+</html>
