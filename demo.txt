@@ -469,3 +469,195 @@
   </script>
 </body>
 </html>
+
+
+
+const Consul = require('consul');
+const axios = require('axios');
+const express = require('express');
+
+// 初始化Consul客户端
+const consul = new Consul({
+  hosts: ['192.168.1.101:8500', '192.168.1.102:8500', '192.168.1.103:8500'],
+  promisify: true
+});
+
+const app = express();
+app.use(express.json());
+
+/**
+ * 获取服务的所有健康实例
+ * @param {string} serviceName - 服务名称
+ * @returns {Array} 健康实例列表
+ */
+async function getAllHealthyInstances(serviceName) {
+  try {
+    const { body: serviceInstances } = await consul.health.service(serviceName);
+    
+    // 筛选所有服务检查通过的实例
+    const healthyInstances = serviceInstances.filter(instance => {
+      const serviceChecks = instance.Checks.filter(check => check.ServiceName === serviceName);
+      return serviceChecks.every(check => check.Status === 'passing');
+    });
+    
+    // 去重处理（基于Service.ID）
+    const uniqueInstances = [];
+    const seenIds = new Set();
+    
+    for (const instance of healthyInstances) {
+      const serviceId = instance.Service.ID;
+      if (!seenIds.has(serviceId)) {
+        seenIds.add(serviceId);
+        uniqueInstances.push({
+          id: serviceId,
+          name: instance.Service.Service,
+          address: instance.Service.Address,
+          port: instance.Service.Port,
+          tags: instance.Service.Tags
+        });
+      }
+    }
+    
+    return uniqueInstances;
+  } catch (err) {
+    console.error(`获取服务${serviceName}的健康实例失败:`, err.message);
+    throw err;
+  }
+}
+
+/**
+ * 并发请求所有实例的同一接口并合并结果
+ * @param {string} serviceName - 服务名称
+ * @param {string} apiPath - 要请求的接口路径
+ * @param {Object} options - 请求选项（method, data, timeout等）
+ * @returns {Object} 包含合并结果的数据
+ */
+async function fetchAndMerge(serviceName, apiPath, options = {}) {
+  try {
+    // 1. 获取所有健康实例
+    const instances = await getAllHealthyInstances(serviceName);
+    
+    if (instances.length === 0) {
+      throw new Error(`服务${serviceName}没有可用的健康实例`);
+    }
+    
+    console.log(`发现${instances.length}个健康的${serviceName}实例，开始并发请求...`);
+    
+    // 2. 为每个实例创建请求Promise
+    const requests = instances.map(instance => {
+      const url = `http://${instance.address}:${instance.port}${apiPath}`;
+      const timeout = options.timeout || 5000; // 默认超时5秒
+      
+      // 发起请求并包装结果
+      return axios({
+        method: options.method || 'get',
+        url,
+        data: options.data || {},
+        params: options.params || {},
+        timeout
+      })
+      .then(response => ({
+        success: true,
+        instance: { id: instance.id, address: instance.address, port: instance.port },
+        data: response.data
+      }))
+      .catch(error => ({
+        success: false,
+        instance: { id: instance.id, address: instance.address, port: instance.port },
+        error: error.message || '请求失败'
+      }));
+    });
+    
+    // 3. 并发执行所有请求
+    const results = await Promise.all(requests);
+    
+    // 4. 处理结果：分离成功和失败的请求
+    const successful = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
+    
+    // 5. 合并成功结果（可根据实际需求调整合并策略）
+    const mergedData = {
+      combined: successful.flatMap(r => r.data), // 简单合并为数组
+      byInstance: successful.map(r => ({
+        instance: r.instance,
+        data: r.data
+      }))
+    };
+    
+    return {
+      summary: {
+        total: instances.length,
+        successful: successful.length,
+        failed: failed.length
+      },
+      mergedData,
+      failures: failed.map(f => ({
+        instance: f.instance,
+        error: f.error
+      }))
+    };
+  } catch (err) {
+    console.error(`处理服务${serviceName}请求失败:`, err.message);
+    throw err;
+  }
+}
+
+// 提供API接口供外部调用
+app.get('/fetch-all', async (req, res) => {
+  try {
+    const { serviceName, apiPath } = req.query;
+    
+    if (!serviceName || !apiPath) {
+      return res.status(400).json({
+        error: '参数错误',
+        message: '需要提供serviceName和apiPath参数'
+      });
+    }
+    
+    const result = await fetchAndMerge(serviceName, apiPath, {
+      method: req.query.method || 'get',
+      timeout: parseInt(req.query.timeout) || 5000
+    });
+    
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({
+      error: '操作失败',
+      message: err.message
+    });
+  }
+});
+
+// 示例：POST请求支持
+app.post('/fetch-all', async (req, res) => {
+  try {
+    const { serviceName, apiPath, data } = req.body;
+    
+    if (!serviceName || !apiPath) {
+      return res.status(400).json({
+        error: '参数错误',
+        message: '需要提供serviceName和apiPath'
+      });
+    }
+    
+    const result = await fetchAndMerge(serviceName, apiPath, {
+      method: 'post',
+      data: data || {},
+      timeout: req.body.timeout || 5000
+    });
+    
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({
+      error: '操作失败',
+      message: err.message
+    });
+  }
+});
+
+// 启动服务
+const port = 3000;
+app.listen(port, () => {
+  console.log(`服务启动于 http://localhost:${port}`);
+  console.log(`使用示例: GET http://localhost:${port}/fetch-all?serviceName=user-service&apiPath=/api/data`);
+});
