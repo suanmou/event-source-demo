@@ -1,0 +1,77 @@
+import quickfix.*;
+import quickfix.jdbc.JdbcStore;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
+
+/**
+ * 自定义JDBC存储工厂（HikariCP连接池）
+ */
+public class HikariJdbcStoreFactory implements StoreFactory, MessageStoreFactory {
+    private final HikariDataSource dataSource;
+    private final String sessionTablePrefix;
+    private final int lockTimeout;
+    private final int lockPollInterval;
+
+    // 从配置文件读取参数初始化
+    public HikariJdbcStoreFactory(SessionSettings settings) throws ConfigError {
+        // 读取自定义配置（在fix-config.cfg中配置）
+        sessionTablePrefix = settings.getString("SessionTablePrefix");
+        lockTimeout = settings.getInt("JdbcStoreLockTimeout");
+        lockPollInterval = settings.getInt("JdbcStoreLockPollInterval");
+
+        // 初始化HikariCP连接池
+        HikariConfig hikariConfig = new HikariConfig();
+        hikariConfig.setJdbcUrl(settings.getString("JdbcURL"));
+        hikariConfig.setUsername(settings.getString("JdbcUser"));
+        hikariConfig.setPassword(settings.getString("JdbcPassword"));
+        hikariConfig.setDriverClassName(settings.getString("JdbcDriver"));
+        
+        // 连接池优化参数
+        hikariConfig.setMaximumPoolSize(50); // 最大连接数
+        hikariConfig.setMinimumIdle(10);    // 最小空闲连接
+        hikariConfig.setConnectionTimeout(30000); // 连接超时30秒
+        hikariConfig.setIdleTimeout(600000); // 空闲连接超时10分钟
+        hikariConfig.setMaxLifetime(1800000); // 连接最大生命周期30分钟
+
+        this.dataSource = new HikariDataSource(hikariConfig);
+    }
+
+    // 创建会话状态存储（核心）
+    @Override
+    public SessionStore create(SessionID sessionID) {
+        try {
+            return new JdbcStore(
+                dataSource.getConnection(), // 从连接池获取连接
+                sessionTablePrefix,
+                sessionID,
+                lockTimeout,
+                lockPollInterval
+            );
+        } catch (SQLException e) {
+            throw new RuntimeException("创建SessionStore失败", e);
+        }
+    }
+
+    // 创建消息存储
+    @Override
+    public MessageStore createMessageStore(SessionID sessionID) {
+        try {
+            return new quickfix.jdbc.JdbcMessageStore(
+                dataSource.getConnection(),
+                sessionTablePrefix,
+                sessionID
+            );
+        } catch (SQLException e) {
+            throw new RuntimeException("创建MessageStore失败", e);
+        }
+    }
+
+    // 关闭连接池（应用停止时调用）
+    public void destroy() {
+        if (dataSource != null && !dataSource.isClosed()) {
+            dataSource.close();
+        }
+    }
+}
