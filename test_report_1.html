@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fix Engine压测报告详情</title>
+  <!-- 引入Vue2 -->
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <!-- 引入ElementUI样式 -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-ui@2.15.13/lib/theme-chalk/index.css">
+  <!-- 引入ElementUI组件 -->
+  <script src="https://cdn.jsdelivr.net/npm/element-ui@2.15.13/lib/index.js"></script>
+  <!-- 引入ECharts -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+</head>
+<body style="margin: 0; padding: 0;">
+  <div id="app" class="fix-report-container">
+    <!-- 页面标题 -->
+    <div class="page-header">
+      <h2>Fix Engine压测报告详情</h2>
+      <el-tag :type="getStatusTagType(report.status)">{{ report.status }}</el-tag>
+    </div>
+
+    <!-- 基本信息卡片 -->
+    <el-card class="basic-info-card">
+      <h3 class="card-title">基本信息</h3>
+      <div class="info-grid">
+        <div class="info-item">
+          <label>报告ID</label>
+          <span>{{ report.id }}</span>
+        </div>
+        <div class="info-item">
+          <label>报告名称</label>
+          <span>{{ report.reportName }}</span>
+        </div>
+        <div class="info-item">
+          <label>配置名称</label>
+          <span>{{ report.configName }}</span>
+        </div>
+        <div class="info-item">
+          <label>配置ID</label>
+          <span>{{ report.configId }}</span>
+        </div>
+        <div class="info-item">
+          <label>开始时间</label>
+          <span>{{ formatDateTime(report.startTime) }}</span>
+        </div>
+        <div class="info-item">
+          <label>结束时间</label>
+          <span>{{ formatDateTime(report.endTime) }}</span>
+        </div>
+        <div class="info-item">
+          <label>测试时长</label>
+          <span>{{ report.durationMinutes }} 分钟</span>
+        </div>
+        <div class="info-item">
+          <label>超时时间</label>
+          <span>{{ report.timeoutSeconds }} 秒</span>
+        </div>
+      </div>
+    </el-card>
+
+    <!-- 核心统计指标 -->
+    <div class="core-stats-section">
+      <h3 class="section-title">核心统计指标</h3>
+      <div class="stats-grid">
+        <!-- 会话统计 -->
+        <el-card class="stat-card">
+          <div class="stat-icon session-icon">
+            <i class="el-icon-sitemap"></i>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">总会话数</p>
+            <p class="stat-value">{{ report.totalSessions }}</p>
+          </div>
+        </el-card>
+
+        <!-- 消息统计 -->
+        <el-card class="stat-card">
+          <div class="stat-icon message-icon">
+            <i class="el-icon-message"></i>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">总消息数</p>
+            <p class="stat-value">{{ report.totalMessages }}</p>
+          </div>
+        </el-card>
+
+        <!-- 发送消息数 -->
+        <el-card class="stat-card">
+          <div class="stat-icon send-icon">
+            <i class="el-icon-paper-plane"></i>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">发送消息数</p>
+            <p class="stat-value">{{ report.totalMessagesSent }}</p>
+          </div>
+        </el-card>
+
+        <!-- 接收响应数 -->
+        <el-card class="stat-card">
+          <div class="stat-icon receive-icon">
+            <i class="el-icon-download"></i>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">接收响应数</p>
+            <p class="stat-value">{{ report.totalResponsesReceived }}</p>
+          </div>
+        </el-card>
+
+        <!-- 目标速率 -->
+        <el-card class="stat-card">
+          <div class="stat-icon rate-icon">
+            <i class="el-icon-speedometer"></i>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">目标速率(条/秒)</p>
+            <p class="stat-value">{{ report.targetRate }}</p>
+          </div>
+        </el-card>
+
+        <!-- 实际速率 -->
+        <el-card class="stat-card">
+          <div class="stat-icon actual-rate-icon">
+            <i class="el-icon-dashboard"></i>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">实际速率(条/秒)</p>
+            <p class="stat-value">{{ report.actualRate }}</p>
+          </div>
+        </el-card>
+
+        <!-- 超时次数 -->
+        <el-card class="stat-card">
+          <div class="stat-icon timeout-icon">
+            <i class="el-icon-clock"></i>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">超时次数</p>
+            <p class="stat-value">{{ report.timeoutCount }}</p>
+          </div>
+        </el-card>
+
+        <!-- 连接成功率 -->
+        <el-card class="stat-card">
+          <div class="stat-icon success-rate-icon">
+            <i class="el-icon-check-circle"></i>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">连接成功率</p>
+            <p class="stat-value">{{ report.connectionSuccessRate }}%</p>
+          </div>
+        </el-card>
+      </div>
+    </div>
+
+    <!-- 响应时间统计（横向表格） -->
+    <el-card class="response-time-card">
+      <h3 class="card-title">响应时间统计 (毫秒)</h3>
+      <div class="table-container">
+        <el-table :data="responseTimeTableData" border style="width: 100%;">
+          <el-table-column 
+            v-for="item in responseTimeTableColumns" 
+            :key="item.prop"
+            :prop="item.prop"
+            :label="item.label"
+            align="center"
+          >
+            <template slot-scope="scope">
+              <span class="table-value">{{ scope.row[item.prop] }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      
+      <!-- 响应时间图表 -->
+      <div class="chart-container">
+        <h4>响应时间分布</h4>
+        <div id="responseTimeChart" class="chart"></div>
+      </div>
+    </el-card>
+
+    <!-- 连接统计（横向表格） -->
+    <el-card class="connection-card">
+      <h3 class="card-title">连接统计</h3>
+      <div class="table-container">
+        <el-table :data="connectionTableData" border style="width: 100%;">
+          <el-table-column 
+            v-for="item in connectionTableColumns" 
+            :key="item.prop"
+            :prop="item.prop"
+            :label="item.label"
+            align="center"
+          >
+            <template slot-scope="scope">
+              <span class="table-value">{{ scope.row[item.prop] }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-card>
+
+    <!-- 详细配置信息 -->
+    <div class="config-section">
+      <h3 class="section-title">详细配置</h3>
+      <el-collapse>
+        <!-- Fix配置 -->
+        <el-collapse-item title="Fix配置" name="fixConfig">
+          <el-table :data="formatFixConfig" border style="width: 100%;">
+            <el-table-column prop="key" label="配置项" width="30%"></el-table-column>
+            <el-table-column prop="value" label="配置值"></el-table-column>
+          </el-table>
+        </el-collapse-item>
+        
+        <!-- 连接配置 -->
+        <el-collapse-item title="连接配置" name="connectionConfig">
+          <el-table :data="formatConnectionConfig" border style="width: 100%;">
+            <el-table-column prop="key" label="配置项" width="30%"></el-table-column>
+            <el-table-column prop="value" label="配置值"></el-table-column>
+          </el-table>
+        </el-collapse-item>
+      </el-collapse>
+    </div>
+
+    <!-- 错误信息 -->
+    <el-card v-if="report.errorMessage || report.connectionErrors" class="error-card">
+      <h3 class="card-title">错误信息</h3>
+      <div class="error-content">
+        <div v-if="report.errorMessage" class="error-item">
+          <label>错误描述：</label>
+          <span>{{ report.errorMessage }}</span>
+        </div>
+        <div v-if="report.connectionErrors" class="error-item">
+          <label>连接错误：</label>
+          <span>{{ report.connectionErrors }}</span>
+        </div>
+      </div>
+    </el-card>
+  </div>
+
+  <style>
+    .fix-report-container {
+      padding: 20px;
+      background-color: #f5f7fa;
+      min-height: 100vh;
+    }
+
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .page-header h2 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #1989fa;
+      margin: 0;
+    }
+
+    .el-tag {
+      font-size: 14px;
+      padding: 4px 12px;
+    }
+
+    .basic-info-card,
+    .response-time-card,
+    .connection-card,
+    .error-card {
+      margin-bottom: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.08);
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #1f2d3d;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #e8e8e8;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .info-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .info-item label {
+      font-size: 12px;
+      color: #86909c;
+      margin-bottom: 4px;
+    }
+
+    .info-item span {
+      font-size: 14px;
+      color: #1f2d3d;
+      word-break: break-all;
+    }
+
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1f2d3d;
+      margin: 24px 0 16px;
+      padding-left: 8px;
+      border-left: 4px solid #1989fa;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .stat-card {
+      text-align: center;
+      padding: 16px;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+    }
+
+    .stat-icon {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 12px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+
+    .session-icon {
+      background-color: #e8f4f8;
+      color: #4299e1;
+    }
+
+    .message-icon {
+      background-color: #f0f8fb;
+      color: #38b2ac;
+    }
+
+    .send-icon {
+      background-color: #fdf2f8;
+      color: #9f7aea;
+    }
+
+    .receive-icon {
+      background-color: #f5fafe;
+      color: #48bb78;
+    }
+
+    .rate-icon {
+      background-color: #fef7fb;
+      color: #ed8936;
+    }
+
+    .actual-rate-icon {
+      background-color: #f8f8f8;
+      color: #e53e3e;
+    }
+
+    .timeout-icon {
+      background-color: #faf0f5;
+      color: #7472FE;
+    }
+
+    .success-rate-icon {
+      background-color: #eaf6fa;
+      color: #34D399;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: #86909c;
+      margin: 0 0 4px;
+    }
+
+    .stat-value {
+      font-size: 24px;
+      font-weight: 600;
+      color: #1f2d3d;
+      margin: 0;
+    }
+
+    /* 表格样式优化 */
+    .table-container {
+      margin-bottom: 20px;
+    }
+
+    .el-table {
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .el-table th {
+      background-color: #f8f9fa;
+      font-weight: 600;
+      color: #1f2d3d;
+      font-size: 14px;
+    }
+
+    .el-table td {
+      font-size: 15px;
+      color: #1f2d3d;
+      height: 60px;
+    }
+
+    .table-value {
+      font-weight: 500;
+      color: #1989fa;
+    }
+
+    /* 响应式表格调整 */
+    @media (max-width: 768px) {
+      .el-table {
+        font-size: 13px;
+      }
+      
+      .el-table th {
+        font-size: 12px;
+      }
+      
+      .el-table td {
+        font-size: 13px;
+        height: auto;
+        padding: 10px 5px;
+      }
+    }
+
+    .chart-container {
+      margin-top: 20px;
+    }
+
+    .chart-container h4 {
+      font-size: 14px;
+      color: #1f2d3d;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+
+    .chart {
+      width: 100%;
+      height: 300px;
+    }
+
+    .config-section {
+      margin-bottom: 20px;
+    }
+
+    .el-collapse {
+      background-color: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.08);
+      overflow: hidden;
+    }
+
+    .el-collapse-item__header {
+      font-size: 14px;
+      font-weight: 600;
+      background-color: #f8f9fa;
+    }
+
+    .error-card .error-content {
+      padding: 16px;
+    }
+
+    .error-item {
+      margin-bottom: 12px;
+    }
+
+    .error-item label {
+      font-size: 14px;
+      color: #e53e3e;
+      font-weight: 600;
+      margin-right: 8px;
+    }
+
+    .error-item span {
+      font-size: 14px;
+      color: #4e5969;
+      word-break: break-all;
+    }
+
+    /* 响应式调整 */
+    @media (max-width: 768px) {
+      .info-grid,
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      
+      .page-header .el-tag {
+        margin-top: 8px;
+      }
+    }
+  </style>
+
+  <script>
+    new Vue({
+      el: '#app',
+      data() {
+        return {
+          report: {
+            "id": "dfbd61c6-0872-4600c-ab78-259bc9679d23",
+            "taskId": null,
+            "reportName": "local test1-2025-09-18 00:50:04",
+            "startTime": "2025-09-17T16:50:04.716+00:00",
+            "endTime": "2025-09-17T16:51:30.453+00:00",
+            "status": "STOPPED",
+            "configId": "68cac6701a0427b61a576a5",
+            "configName": "local test1",
+            "totalSessions": 1,
+            "targetRate": 1,
+            "totalMessages": 116,
+            "durationMinutes": 1,
+            "timeoutSeconds": 10,
+            "totalMessagesSent": 0,
+            "totalResponsesReceived": 0,
+            "timeoutCount": 0,
+            "actualRate": 0,
+            "averageResponseTime": 0,
+            "p95ResponseTime": 0,
+            "p99ResponseTime": 0,
+            "minResponseTime": 0,
+            "maxResponseTime": 0,
+            "testDuration": 0,
+            "totalConnections": 0,
+            "connectionSuccessRate": 0,
+            "connectionFailRate": 0,
+            "totalConnectionsSucceeded": 0,
+            "totalConnectionsFailed": 0,
+            "minConnectionTime": 0,
+            "maxConnectionTime": 0,
+            "averageConnectionTime": 0,
+            "connectionErrors": null,
+            "errorMessage": null,
+            "extraFields": null,
+            "config": {
+              "id": "68cac6701a0427b61a576a5",
+              "name": "local test1",
+              "description": "local test1",
+              "fixConfig": {
+                "SocketConnectHost": "127.0.0.1",
+                "SocketConnectPort": "9876",
+                "SocketUseSSL": "N",
+                "SocketKeyStore": "",
+                "SocketKeyStorePassword": ""
+              },
+              "connectionConfig": {
+                "connectType": "Erisck Colo Proxy",
+                "connectionScope": "External",
+                "connect": "gb125088739.hc.c1oud.uk.hsbc:15002",
+                "socketProxy": "uk-server-proxy-02.systems.uk.hsbc:1080"
+              }
+            }
+          },
+          responseTimeChart: null,
+          // 响应时间表格列定义
+          responseTimeTableColumns: [
+            { label: '平均响应时间', prop: 'averageResponseTime' },
+            { label: 'P95响应时间', prop: 'p95ResponseTime' },
+            { label: 'P99响应时间', prop: 'p99ResponseTime' },
+            { label: '最小响应时间', prop: 'minResponseTime' },
+            { label: '最大响应时间', prop: 'maxResponseTime' }
+          ],
+          // 连接统计表格列定义
+          connectionTableColumns: [
+            { label: '总连接数', prop: 'totalConnections' },
+            { label: '成功连接数', prop: 'totalConnectionsSucceeded' },
+            { label: '失败连接数', prop: 'totalConnectionsFailed' },
+            { label: '连接成功率(%)', prop: 'connectionSuccessRate' },
+            { label: '连接失败率(%)', prop: 'connectionFailRate' },
+            { label: '平均连接时间(ms)', prop: 'averageConnectionTime' },
+            { label: '最小连接时间(ms)', prop: 'minConnectionTime' },
+            { label: '最大连接时间(ms)', prop: 'maxConnectionTime' }
+          ]
+        }
+      },
+      computed: {
+        // 格式化Fix配置为表格数据
+        formatFixConfig() {
+          const fixConfig = this.report.config.fixConfig
+          return Object.entries(fixConfig).map(([key, value]) => ({
+            key: this.formatConfigKey(key),
+            value: value || '-'
+          }))
+        },
+        // 格式化连接配置为表格数据
+        formatConnectionConfig() {
+          const connectionConfig = this.report.config.connectionConfig
+          return Object.entries(connectionConfig).map(([key, value]) => ({
+            key: this.formatConfigKey(key),
+            value: value || '-'
+          }))
+        },
+        // 响应时间表格数据
+        responseTimeTableData() {
+          return [
+            {
+              averageResponseTime: this.report.averageResponseTime,
+              p95ResponseTime: this.report.p95ResponseTime,
+              p99ResponseTime: this.report.p99ResponseTime,
+              minResponseTime: this.report.minResponseTime,
+              maxResponseTime: this.report.maxResponseTime
+            }
+          ]
+        },
+        // 连接统计表格数据
+        connectionTableData() {
+          return [
+            {
+              totalConnections: this.report.totalConnections,
+              totalConnectionsSucceeded: this.report.totalConnectionsSucceeded,
+              totalConnectionsFailed: this.report.totalConnectionsFailed,
+              connectionSuccessRate: this.report.connectionSuccessRate,
+              connectionFailRate: this.report.connectionFailRate,
+              averageConnectionTime: this.report.averageConnectionTime,
+              minConnectionTime: this.report.minConnectionTime,
+              maxConnectionTime: this.report.maxConnectionTime
+            }
+          ]
+        }
+      },
+      mounted() {
+        // 初始化图表
+        this.initResponseTimeChart()
+      },
+      methods: {
+        // 根据状态获取标签类型
+        getStatusTagType(status) {
+          switch (status.toUpperCase()) {
+            case 'SUCCESS':
+              return 'success'
+            case 'FAILED':
+              return 'danger'
+            case 'RUNNING':
+              return 'warning'
+            case 'STOPPED':
+              return 'info'
+            default:
+              return 'default'
+          }
+        },
+        // 格式化日期时间
+        formatDateTime(dateString) {
+          if (!dateString) return '-'
+          const date = new Date(dateString)
+          return date.toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            timeZoneName: 'short'
+          })
+        },
+        // 格式化配置项名称
+        formatConfigKey(key) {
+          // 驼峰命名转中文
+          return key.replace(/([A-Z])/g, ' $1')
+            .replace(/^ /, '')
+            .replace(/Socket /, 'Socket ')
+            .replace(/UseSSL/, '使用SSL')
+            .replace(/KeyStore/, '密钥库')
+            .replace(/Password/, '密码')
+            .replace(/ConnectHost/, '连接主机')
+            .replace(/ConnectPort/, '连接端口')
+            .replace(/connectType/, '连接类型')
+            .replace(/connectionScope/, '连接范围')
+            .replace(/socketProxy/, 'Socket代理')
+        },
+        // 初始化响应时间图表
+        initResponseTimeChart() {
+          this.responseTimeChart = echarts.init(document.getElementById('responseTimeChart'))
+          
+          const option = {
+            tooltip: {
+              trigger: 'axis',
+              axisPointer: {
+                type: 'shadow'
+              }
+            },
+            grid: {
+              left: '3%',
+              right: '4%',
+              bottom: '3%',
+              containLabel: true
+            },
+            xAxis: {
+              type: 'category',
+              data: ['平均响应时间', 'P95响应时间', 'P99响应时间', '最小响应时间', '最大响应时间']
+            },
+            yAxis: {
+              type: 'value',
+              name: '时间 (毫秒)',
+              min: 0
+            },
+            series: [
+              {
+                name: '响应时间',
+                type: 'bar',
+                data: [
+                  this.report.averageResponseTime,
+                  this.report.p95ResponseTime,
+                  this.report.p99ResponseTime,
+                  this.report.minResponseTime,
+                  this.report.maxResponseTime
+                ],
+                itemStyle: {
+                  color: function(params) {
+                    const colors = ['#409EFF', '#67C23A', '#E6A23C', '#909399', '#F56C6C']
+                    return colors[params.dataIndex]
+                  }
+                },
+                label: {
+                  show: true,
+                  position: 'top'
+                }
+              }
+            ]
+          }
+          
+          this.responseTimeChart.setOption(option)
+          
+          // 窗口大小变化时重新渲染图表
+          window.addEventListener('resize', () => {
+            this.responseTimeChart.resize()
+          })
+        }
+      },
+      beforeDestroy() {
+        // 销毁图表实例
+        if (this.responseTimeChart) {
+          this.responseTimeChart.dispose()
+        }
+        window.removeEventListener('resize', this.responseTimeChart.resize)
+      }
+    })
+  </script>
+</body>
+</html>
