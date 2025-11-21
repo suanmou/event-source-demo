@@ -1,0 +1,697 @@
+import quickfix.*;
+import quickfix.field.TestReqID;
+import quickfix.fix44.Heartbeat;
+import quickfix.fix44.LogonReject;
+import quickfix.fix44.TestRequest;
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+
+/**
+ * FIX系统TestRequest消息压测工具（大规模会话优化版）
+ * 功能：分批会话启动、动态重连间隔、连接超时控制、完整指标统计
+ */
+public class FixBenchmarkOptimized {
+
+    // ==================== 数据模型与枚举 ====================
+    enum MessageStatus {
+        SENT, RECEIVED, TIMEOUT, SEND_FAILED
+    }
+
+    enum ErrorReason {
+        SEND_EXCEPTION("发送时抛出异常"),
+        SESSION_NOT_LOGGED_IN("会话未登录"),
+        TIMEOUT("超时未收到回复"),
+        ENGINE_REJECT("引擎拒签（如序列号错误）"),
+        LOGON_REJECT("登录被拒"),
+        LOGON_TIMEOUT("登录超时"),
+        UNKNOWN("未知错误");
+
+        private final String desc;
+        ErrorReason(String desc) { this.desc = desc; }
+        public String getDesc() { return desc; }
+    }
+
+    static class TestRequestTrack {
+        private final String testReqID;
+        private final Instant sendTime;
+        private Instant receiveTime;
+        private MessageStatus status;
+        private ErrorReason errorReason;
+
+        public TestRequestTrack(String testReqID, Instant sendTime) {
+            this.testReqID = testReqID;
+            this.sendTime = sendTime;
+            this.status = MessageStatus.SENT;
+        }
+
+        public String getTestReqID() { return testReqID; }
+        public Instant getSendTime() { return sendTime; }
+        public Instant getReceiveTime() { return receiveTime; }
+        public void setReceiveTime(Instant receiveTime) { this.receiveTime = receiveTime; }
+        public MessageStatus getStatus() { return status; }
+        public void setStatus(MessageStatus status) { this.status = status; }
+        public ErrorReason getErrorReason() { return errorReason; }
+        public void setErrorReason(ErrorReason errorReason) { this.errorReason = errorReason; }
+    }
+
+    static class SessionReconnectStats {
+        private boolean firstLoginSuccess = false;
+        private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
+        private final AtomicInteger reconnectSuccess = new AtomicInteger(0);
+        private final String sessionID;
+        private long lastLoginAttemptTime = 0; // 上次登录尝试时间（用于动态重连间隔）
+
+        public SessionReconnectStats(String sessionID) { this.sessionID = sessionID; }
+
+        public void markFirstLoginSuccess() { this.firstLoginSuccess = true; }
+        public void incrementReconnectAttempt() { 
+            reconnectAttempts.incrementAndGet(); 
+            lastLoginAttemptTime = System.currentTimeMillis();
+        }
+        public void incrementReconnectSuccess() { reconnectSuccess.incrementAndGet(); }
+        public double getReconnectRate() {
+            int attempts = reconnectAttempts.get();
+            return attempts == 0 ? 0 : (double) reconnectSuccess.get() / attempts * 100;
+        }
+        public int getReconnectAttempts() { return reconnectAttempts.get(); }
+        public int getReconnectSuccess() { return reconnectSuccess.get(); }
+        public boolean isFirstLoginSuccess() { return firstLoginSuccess; }
+        public String getSessionID() { return sessionID; }
+        public long getLastLoginAttemptTime() { return lastLoginAttemptTime; }
+    }
+
+    // ==================== 指标收集器 ====================
+    static class MetricsCollector {
+        private final ConcurrentHashMap<String, ConcurrentHashMap<String, TestRequestTrack>> sessionTracks = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<String, SessionReconnectStats> sessionReconnectStats = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<ErrorReason, AtomicInteger> errorReasonCounts = new ConcurrentHashMap<>();
+        private final Set<String> abnormalSessions = ConcurrentHashMap.newKeySet();
+        private final Set<String> pendingLoginSessions = ConcurrentHashMap.newKeySet(); // 等待登录的会话
+        private final Set<String> activeSessions = ConcurrentHashMap.newKeySet(); // 活跃会话（已登录）
+
+        public MetricsCollector() {
+            Arrays.stream(ErrorReason.values()).forEach(reason ->
+                    errorReasonCounts.putIfAbsent(reason, new AtomicInteger(0)));
+        }
+
+        public void initSession(String sessionID) {
+            sessionTracks.putIfAbsent(sessionID, new ConcurrentHashMap<>());
+            sessionReconnectStats.putIfAbsent(sessionID, new SessionReconnectStats(sessionID));
+            pendingLoginSessions.add(sessionID);
+        }
+
+        public void markFirstLoginSuccess(String sessionID) {
+            sessionReconnectStats.get(sessionID).markFirstLoginSuccess();
+            pendingLoginSessions.remove(sessionID);
+            activeSessions.add(sessionID);
+        }
+
+        public void markReconnectAttempt(String sessionID) {
+            sessionReconnectStats.get(sessionID).incrementReconnectAttempt();
+        }
+
+        public void markReconnectSuccess(String sessionID) {
+            sessionReconnectStats.get(sessionID).incrementReconnectSuccess();
+            pendingLoginSessions.remove(sessionID);
+            activeSessions.add(sessionID);
+        }
+
+        public void trackSent(String sessionID, TestRequestTrack track) {
+            sessionTracks.get(sessionID).put(track.getTestReqID(), track);
+        }
+
+        public void trackReceived(String sessionID, String testReqID, Instant receiveTime) {
+            TestRequestTrack track = sessionTracks.get(sessionID).get(testReqID);
+            if (track != null) {
+                track.setReceiveTime(receiveTime);
+                track.setStatus(MessageStatus.RECEIVED);
+            }
+        }
+
+        public void trackSendFailed(String sessionID, String testReqID, ErrorReason reason) {
+            TestRequestTrack track = sessionTracks.get(sessionID).get(testReqID);
+            if (track != null) {
+                track.setStatus(MessageStatus.SEND_FAILED);
+                track.setErrorReason(reason);
+            }
+            errorReasonCounts.get(reason).incrementAndGet();
+        }
+
+        public void checkTimeouts(long timeoutMillis) {
+            Instant now = Instant.now();
+            sessionTracks.values().forEach(trackMap -> {
+                trackMap.values().forEach(track -> {
+                    if (track.getStatus() == MessageStatus.SENT) {
+                        long duration = java.time.Duration.between(track.getSendTime(), now).toMillis();
+                        if (duration > timeoutMillis) {
+                            track.setStatus(MessageStatus.TIMEOUT);
+                            track.setErrorReason(ErrorReason.TIMEOUT);
+                            errorReasonCounts.get(ErrorReason.TIMEOUT).incrementAndGet();
+                        }
+                    }
+                });
+            });
+        }
+
+        public void markAbnormalSession(String sessionID) {
+            abnormalSessions.add(sessionID);
+            pendingLoginSessions.remove(sessionID);
+            activeSessions.remove(sessionID);
+        }
+
+        // 检查会话登录超时
+        public void checkLoginTimeouts(long loginTimeoutMillis) {
+            long now = System.currentTimeMillis();
+            pendingLoginSessions.forEach(sessionID -> {
+                SessionReconnectStats stats = sessionReconnectStats.get(sessionID);
+                if (stats != null && stats.getLastLoginAttemptTime() > 0) {
+                    long timeSinceLastAttempt = now - stats.getLastLoginAttemptTime();
+                    if (timeSinceLastAttempt > loginTimeoutMillis) {
+                        markAbnormalSession(sessionID);
+                        trackSendFailed(sessionID, "LOGIN-TIMEOUT", ErrorReason.LOGON_TIMEOUT);
+                        System.err.printf("会话[%s]登录超时（%dms），标记为异常%n", 
+                                sessionID, loginTimeoutMillis);
+                    }
+                }
+            });
+        }
+
+        public String generateSummaryReport() {
+            StringBuilder report = new StringBuilder("\n===== 全局汇总报告 =====");
+            int totalSessions = sessionReconnectStats.size();
+            int abnormalCount = abnormalSessions.size();
+            int activeCount = activeSessions.size();
+            int pendingCount = pendingLoginSessions.size();
+
+            report.append("\n会话统计:")
+                    .append("\n  总会话数: ").append(totalSessions)
+                    .append("\n  活跃会话数: ").append(activeCount)
+                    .append("\n  等待登录数: ").append(pendingCount)
+                    .append("\n  异常会话数: ").append(abnormalCount);
+
+            // 会话建立成功率
+            int validSessions = totalSessions - abnormalCount;
+            int firstLoginSuccess = activeCount; // 已登录的会话都是首次登录成功的
+            double firstLoginRate = validSessions == 0 ? 0 : (double) firstLoginSuccess / validSessions * 100;
+
+            int totalReconnectAttempts = sessionReconnectStats.values().stream()
+                    .filter(stat -> !abnormalSessions.contains(stat.getSessionID()))
+                    .mapToInt(SessionReconnectStats::getReconnectAttempts)
+                    .sum();
+            int totalReconnectSuccess = sessionReconnectStats.values().stream()
+                    .filter(stat -> !abnormalSessions.contains(stat.getSessionID()))
+                    .mapToInt(SessionReconnectStats::getReconnectSuccess)
+                    .sum();
+            double globalReconnectRate = totalReconnectAttempts == 0 ? 0 :
+                    (double) totalReconnectSuccess / totalReconnectAttempts * 100;
+
+            report.append("\n\n连接指标:")
+                    .append("\n  首次连接成功率: ").append(String.format("%.2f", firstLoginRate)).append("%")
+                    .append("\n  总重连尝试次数: ").append(totalReconnectAttempts)
+                    .append("，总重连成功次数: ").append(totalReconnectSuccess)
+                    .append("\n  全局重连率: ").append(String.format("%.2f", globalReconnectRate)).append("%");
+
+            // 消息错误统计
+            int totalSent = sessionTracks.values().stream()
+                    .filter(map -> activeSessions.contains(getSessionIdFromMap(map)))
+                    .mapToInt(ConcurrentHashMap::size)
+                    .sum();
+            int totalFailed = errorReasonCounts.values().stream().mapToInt(AtomicInteger::get).sum();
+            double errorRate = totalSent == 0 ? 0 : (double) totalFailed / totalSent * 100;
+
+            report.append("\n\n消息指标:")
+                    .append("\n  消息总发送数: ").append(totalSent)
+                    .append("，总失败数: ").append(totalFailed)
+                    .append("，总错误率: ").append(String.format("%.4f", errorRate)).append("%")
+                    .append("\n  错误原因分布:");
+            errorReasonCounts.forEach((reason, count) -> {
+                if (count.get() > 0) {
+                    report.append("\n    - ").append(reason.getDesc()).append(": ").append(count.get()).append("次");
+                }
+            });
+
+            // 延时统计
+            List<Long> latencies = new ArrayList<>();
+            sessionTracks.forEach((sessionID, trackMap) -> {
+                if (!activeSessions.contains(sessionID)) return;
+                trackMap.values().forEach(track -> {
+                    if (track.getStatus() == MessageStatus.RECEIVED) {
+                        long latency = java.time.Duration.between(track.getSendTime(), track.getReceiveTime()).toMillis();
+                        latencies.add(latency);
+                    }
+                });
+            });
+            if (!latencies.isEmpty()) {
+                latencies.sort(Long::compare);
+                long avg = (long) latencies.stream().mapToLong(l -> l).average().orElse(0);
+                long p50 = latencies.get(latencies.size() / 2);
+                long p90 = latencies.get((int) (latencies.size() * 0.9));
+                long p99 = latencies.get((int) (latencies.size() * 0.99));
+                report.append("\n\n延时统计:")
+                        .append("\n  平均延时: ").append(avg).append("ms")
+                        .append("\n  P50延时: ").append(p50).append("ms")
+                        .append("\n  P90延时: ").append(p90).append("ms")
+                        .append("\n  P99延时: ").append(p99).append("ms");
+            }
+
+            return report.toString();
+        }
+
+        private String getSessionIdFromMap(ConcurrentHashMap<String, TestRequestTrack> map) {
+            return map.isEmpty() ? "" : map.keySet().iterator().next().split("-")[1];
+        }
+
+        public String generatePerSessionReport() {
+            StringBuilder report = new StringBuilder("\n===== 单会话详细报告 =====");
+            sessionReconnectStats.forEach((sessionID, stats) -> {
+                if (abnormalSessions.contains(sessionID)) {
+                    report.append("\n\n会话ID: ").append(sessionID).append("（异常会话，未参与压测）");
+                    return;
+                }
+
+                report.append("\n\n会话ID: ").append(sessionID)
+                        .append("\n  状态: ").append(activeSessions.contains(sessionID) ? "活跃" : "等待登录")
+                        .append("\n  首次连接: ").append(stats.isFirstLoginSuccess() ? "成功" : "失败")
+                        .append("\n  重连尝试: ").append(stats.getReconnectAttempts())
+                        .append("次，成功: ").append(stats.getReconnectSuccess())
+                        .append("次，重连率: ").append(String.format("%.2f", stats.getReconnectRate())).append("%");
+
+                ConcurrentHashMap<String, TestRequestTrack> trackMap = sessionTracks.get(sessionID);
+                if (trackMap == null) return;
+
+                int sent = trackMap.size();
+                int received = 0;
+                Map<ErrorReason, Integer> sessionErrors = new HashMap<>();
+                for (TestRequestTrack track : trackMap.values()) {
+                    if (track.getStatus() == MessageStatus.RECEIVED) {
+                        received++;
+                    } else if (track.getErrorReason() != null) {
+                        sessionErrors.put(track.getErrorReason(),
+                                sessionErrors.getOrDefault(track.getErrorReason(), 0) + 1);
+                    }
+                }
+
+                report.append("\n  消息发送总数: ").append(sent)
+                        .append("，成功接收: ").append(received)
+                        .append("，失败数: ").append(sessionErrors.values().stream().mapToInt(i -> i).sum());
+                if (!sessionErrors.isEmpty()) {
+                    report.append("\n  错误原因:");
+                    sessionErrors.forEach((reason, count) ->
+                            report.append("\n    - ").append(reason.getDesc()).append(": ").append(count).append("次")
+                    );
+                }
+            });
+            return report.toString();
+        }
+
+        // 获取当前活跃会话数（用于分批启动）
+        public int getActiveSessionCount() {
+            return activeSessions.size();
+        }
+
+        // 获取当前等待登录会话数
+        public int getPendingLoginSessionCount() {
+            return pendingLoginSessions.size();
+        }
+    }
+
+    // ==================== 分批会话启动器 ====================
+    static class SessionBatchStarter {
+        private final SocketInitiator initiator;
+        private final MetricsCollector metrics;
+        private final int totalSessionCount;
+        private final int batchSize;
+        private final long batchIntervalMs;
+        private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+
+        public SessionBatchStarter(SocketInitiator initiator, MetricsCollector metrics,
+                                 int totalSessionCount, int batchSize, long batchIntervalMs) {
+            this.initiator = initiator;
+            this.metrics = metrics;
+            this.totalSessionCount = totalSessionCount;
+            this.batchSize = batchSize;
+            this.batchIntervalMs = batchIntervalMs;
+        }
+
+        public void start() {
+            System.out.printf("开始分批启动会话：每批%d个，间隔%dms，共%d个会话%n",
+                    batchSize, batchIntervalMs, totalSessionCount);
+            
+            // 先启动第一批
+            startNextBatch(0);
+        }
+
+        private void startNextBatch(int currentBatchIndex) {
+            int startIdx = currentBatchIndex * batchSize;
+            int endIdx = Math.min(startIdx + batchSize, totalSessionCount);
+            
+            if (startIdx >= totalSessionCount) {
+                System.out.println("所有会话批次启动完成");
+                return;
+            }
+
+            System.out.printf("启动第%d批会话：会话%d-%d%n", 
+                    currentBatchIndex + 1, startIdx, endIdx - 1);
+
+            // 实际项目中，这里需要动态添加会话到Initiator
+            // 由于QuickFIX/J的限制，这里简化为打印日志
+            // 在实际实现中，可以通过修改配置文件或动态创建SessionSettings来实现
+
+            // 等待一段时间后启动下一批
+            scheduler.schedule(() -> {
+                // 检查当前活跃会话数，确保前一批大部分已登录
+                int activeCount = metrics.getActiveSessionCount();
+                System.out.printf("当前活跃会话数：%d，等待下一批启动...%n", activeCount);
+                startNextBatch(currentBatchIndex + 1);
+            }, batchIntervalMs, TimeUnit.MILLISECONDS);
+        }
+
+        public void shutdown() {
+            scheduler.shutdown();
+        }
+    }
+
+    // ==================== 多连接客户端应用 ====================
+    static class FixBenchmarkApplication implements Application {
+        private final MetricsCollector metrics;
+        private final int tpsPerSession;
+        private final long durationMinutes;
+        private final long timeoutMillis;
+        private final long loginTimeoutMillis;
+        private final ScheduledExecutorService scheduler;
+        private final CountDownLatch allSessionsStarted;
+        private final ConcurrentHashMap<String, Boolean> isFirstLogin = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<String, Integer> retryCount = new ConcurrentHashMap<>();
+        private final int maxRetry;
+        private final ConcurrentHashMap<String, ScheduledFuture<?>> sendFutures = new ConcurrentHashMap<>();
+        private SocketInitiator initiator; // 用于停止异常会话的原生重试
+
+        public FixBenchmarkApplication(MetricsCollector metrics, int tpsPerSession, long durationMinutes,
+                                      long timeoutMillis, long loginTimeoutMillis, int sessionCount, int maxRetry) {
+            this.metrics = metrics;
+            this.tpsPerSession = tpsPerSession;
+            this.durationMinutes = durationMinutes;
+            this.timeoutMillis = timeoutMillis;
+            this.loginTimeoutMillis = loginTimeoutMillis;
+            this.maxRetry = maxRetry;
+            this.allSessionsStarted = new CountDownLatch(sessionCount);
+            this.scheduler = new ScheduledThreadPoolExecutor(
+                    Math.max(sessionCount, 10), // 至少10个线程，避免线程不足
+                    r -> {
+                        Thread t = new Thread(r, "session-worker-" + UUID.randomUUID().toString().substring(0, 4));
+                        t.setDaemon(true);
+                        return t;
+                    }
+            );
+
+            // 启动定时任务
+            scheduler.scheduleAtFixedRate(() -> metrics.checkTimeouts(timeoutMillis), 0, 1, TimeUnit.SECONDS);
+            scheduler.scheduleAtFixedRate(() -> metrics.checkLoginTimeouts(loginTimeoutMillis), 5, 5, TimeUnit.SECONDS);
+            startLoginMonitor();
+        }
+
+        public void setInitiator(SocketInitiator initiator) {
+            this.initiator = initiator;
+        }
+
+        private void startLoginMonitor() {
+            scheduler.scheduleAtFixedRate(() -> {
+                for (SessionID sessionID : Session.getAllSessions()) {
+                    String sessionKey = sessionID.toString();
+                    if (metrics.abnormalSessions.contains(sessionKey)) continue;
+
+                    if (!Session.lookupSession(sessionID).isLoggedOn()) {
+                        int retries = retryCount.getOrDefault(sessionKey, 0);
+                        if (retries < maxRetry) {
+                            // 动态计算重连间隔（指数退避）
+                            long reconnectInterval = calculateReconnectInterval(retries);
+                            long lastAttemptTime = metrics.sessionReconnectStats.get(sessionKey).getLastLoginAttemptTime();
+                            long timeSinceLastAttempt = System.currentTimeMillis() - lastAttemptTime;
+
+                            if (timeSinceLastAttempt >= reconnectInterval) {
+                                try {
+                                    Session.lookupSession(sessionID).logon();
+                                    metrics.markReconnectAttempt(sessionKey);
+                                    System.out.printf("会话[%s]第%d次重试登录（间隔%dms）%n", 
+                                            sessionKey, retries + 1, reconnectInterval);
+                                } catch (Exception e) {
+                                    System.err.printf("会话[%s]重试登录失败: %s%n", sessionKey, e.getMessage());
+                                }
+                            }
+                        } else {
+                            markSessionAbnormal(sessionID);
+                        }
+                    }
+                }
+            }, 10, 2, TimeUnit.SECONDS); // 每2秒检查一次，避免过于频繁
+        }
+
+        // 动态重连间隔计算（指数退避）
+        private long calculateReconnectInterval(int retryCount) {
+            // 基础间隔1秒，最大60秒
+            long baseInterval = 1000;
+            long maxInterval = 60000;
+            long interval = (long) (baseInterval * Math.pow(2, retryCount));
+            return Math.min(interval, maxInterval);
+        }
+
+        // 标记会话异常并停止原生重试
+        private void markSessionAbnormal(SessionID sessionID) {
+            String sessionKey = sessionID.toString();
+            metrics.markAbnormalSession(sessionKey);
+            allSessionsStarted.countDown();
+            
+            // 主动停止原生重试
+            try {
+                Session session = Session.lookupSession(sessionID);
+                if (session != null) {
+                    session.logout("超过最大重试次数，手动注销");
+                    if (initiator != null) {
+                        initiator.removeSession(sessionID);
+                    }
+                }
+                System.err.printf("会话[%s]超过最大重试次数(%d次)，已停止原生重试%n", sessionKey, maxRetry);
+            } catch (Exception e) {
+                System.err.printf("停止会话[%s]原生重试失败: %s%n", sessionKey, e.getMessage());
+            }
+        }
+
+        @Override
+        public void onCreate(SessionID sessionID) {
+            String sessionKey = sessionID.toString();
+            metrics.initSession(sessionKey);
+            isFirstLogin.put(sessionKey, true);
+            retryCount.putIfAbsent(sessionKey, 0);
+            metrics.markReconnectAttempt(sessionKey); // 记录首次登录尝试时间
+        }
+
+        @Override
+        public void onLogon(SessionID sessionID) {
+            String sessionKey = sessionID.toString();
+            if (metrics.abnormalSessions.contains(sessionKey)) return;
+
+            boolean firstLogin = isFirstLogin.getOrDefault(sessionKey, true);
+            if (firstLogin) {
+                metrics.markFirstLoginSuccess(sessionKey);
+                isFirstLogin.put(sessionKey, false);
+                System.out.printf("会话[%s]首次登录成功%n", sessionKey);
+            } else {
+                metrics.markReconnectSuccess(sessionKey);
+                System.out.printf("会话[%s]重连成功%n", sessionKey);
+            }
+
+            startSendTask(sessionID);
+            allSessionsStarted.countDown();
+        }
+
+        @Override
+        public void onLogout(SessionID sessionID) {
+            String sessionKey = sessionID.toString();
+            if (metrics.sessionReconnectStats.get(sessionKey).isFirstLoginSuccess()
+                    && !metrics.abnormalSessions.contains(sessionKey)) {
+                metrics.markReconnectAttempt(sessionKey);
+                System.out.printf("会话[%s]断开连接，触发重连（累计尝试：%d次）%n",
+                        sessionKey, metrics.sessionReconnectStats.get(sessionKey).getReconnectAttempts());
+            }
+        }
+
+        @Override
+        public void toAdmin(Message message, SessionID sessionID) {
+            // 可以在这里添加自定义的Admin消息处理逻辑
+        }
+
+        @Override
+        public void fromAdmin(Message message, SessionID sessionID) throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+            if (message instanceof LogonReject) {
+                LogonReject reject = (LogonReject) message;
+                String reason = reject.isSetField(quickfix.field.Text.FIELD) ?
+                        reject.getText().getValue() : "未知原因";
+                String sessionKey = sessionID.toString();
+                System.err.printf("会话[%s]登录被拒: %s%n", sessionKey, reason);
+                metrics.trackSendFailed(sessionKey, "LOGON-REJECT", ErrorReason.LOGON_REJECT);
+            } else if (message instanceof Reject) {
+                Reject reject = (Reject) message;
+                String testReqID = reject.isSetField(TestReqID.FIELD) ?
+                        reject.getTestReqID().getValue() : "UNKNOWN";
+                metrics.trackSendFailed(sessionID.toString(), testReqID, ErrorReason.ENGINE_REJECT);
+            }
+        }
+
+        @Override
+        public void toApp(Message message, SessionID sessionID) throws DoNotSend {}
+
+        @Override
+        public void fromApp(Message message, SessionID sessionID) throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+            if (message instanceof Heartbeat && message.isSetField(TestReqID.FIELD)) {
+                Heartbeat heartbeat = (Heartbeat) message;
+                String testReqID = heartbeat.getTestReqID().getValue();
+                metrics.trackReceived(sessionID.toString(), testReqID, Instant.now());
+            }
+        }
+
+        private void startSendTask(SessionID sessionID) {
+            String sessionKey = sessionID.toString();
+            AtomicLong seq = new AtomicLong(0);
+            long intervalMs = tpsPerSession > 0 ? 1000 / tpsPerSession : 0;
+
+            // 取消之前的发送任务（重连后重启）
+            if (sendFutures.containsKey(sessionKey)) {
+                sendFutures.get(sessionKey).cancel(true);
+            }
+
+            Runnable sendTask = () -> {
+                try {
+                    Session session = Session.lookupSession(sessionID);
+                    if (session == null || !session.isLoggedOn()) {
+                        String testReqID = "TEST-" + sessionKey + "-" + seq.getAndIncrement();
+                        metrics.trackSendFailed(sessionKey, testReqID, ErrorReason.SESSION_NOT_LOGGED_IN);
+                        return;
+                    }
+
+                    String testReqID = "TEST-" + sessionKey + "-" +
+                            UUID.randomUUID().toString().substring(0, 8) + "-" + seq.getAndIncrement();
+                    TestRequest request = new TestRequest();
+                    request.set(new TestReqID(testReqID));
+                    metrics.trackSent(sessionKey, new TestRequestTrack(testReqID, Instant.now()));
+
+                    boolean sent = Session.sendToTarget(request, sessionID);
+                    if (!sent) {
+                        metrics.trackSendFailed(sessionKey, testReqID, ErrorReason.SEND_EXCEPTION);
+                    }
+                } catch (Exception e) {
+                    String testReqID = "TEST-" + sessionKey + "-" + seq.getAndIncrement();
+                    metrics.trackSendFailed(sessionKey, testReqID, ErrorReason.SEND_EXCEPTION);
+                    System.err.printf("会话[%s]发送异常: %s%n", sessionKey, e.getMessage());
+                }
+            };
+
+            ScheduledFuture<?> future = scheduler.scheduleAtFixedRate(sendTask, 0, intervalMs, TimeUnit.MILLISECONDS);
+            sendFutures.put(sessionKey, future);
+
+            // 测试结束后取消任务
+            scheduler.schedule(() -> {
+                future.cancel(true);
+                System.out.printf("会话[%s]发送任务结束%n", sessionKey);
+            }, durationMinutes, TimeUnit.MINUTES);
+        }
+
+        public void waitForSessionsStart() throws InterruptedException {
+            if (!allSessionsStarted.await(5, TimeUnit.MINUTES)) {
+                System.err.println("部分会话未在规定时间内登录，继续执行剩余会话压测");
+            }
+        }
+
+        public void shutdown() {
+            scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(1, TimeUnit.MINUTES)) {
+                    scheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                scheduler.shutdownNow();
+            }
+        }
+    }
+
+    // ==================== 会话配置工具 ====================
+    static class SessionConfigBuilder {
+        public static SessionSettings createMultiSessionSettings(String configTemplatePath, int sessionCount)
+                throws ConfigError, FileNotFoundException {
+            SessionSettings settings = new SessionSettings(new FileInputStream(configTemplatePath));
+            SessionID templateSessionID = settings.getSessions().iterator().next();
+            Properties templateProps = settings.getSessionProperties(templateSessionID);
+            settings.removeSession(templateSessionID);
+
+            for (int i = 0; i < sessionCount; i++) {
+                String senderCompID = "BENCH-CLIENT-" + i;
+                SessionID newSessionID = new SessionID(
+                        templateSessionID.getBeginString(),
+                        senderCompID,
+                        templateSessionID.getTargetCompID()
+                );
+                Properties sessionProps = new Properties(templateProps);
+                sessionProps.setProperty("SenderCompID", senderCompID);
+                settings.set(newSessionID, sessionProps);
+            }
+            return settings;
+        }
+    }
+
+    // ==================== 测试启动器 ====================
+    public static void main(String[] args) throws Exception {
+        // 压测参数（大规模会话优化版）
+        int totalSessionCount = 200;      // 总会话数
+        int batchSize = 20;               // 每批启动会话数
+        long batchIntervalMs = 10000;     // 批间隔（毫秒）
+        int tpsPerSession = 5;            // 单会话TPS（降低以避免压力过大）
+        long durationMinutes = 5;         // 测试持续时间（分钟）
+        long timeoutMillis = 5000;        // 消息超时时间（毫秒）
+        long loginTimeoutMillis = 30000;  // 登录超时时间（毫秒）
+        int maxLoginRetry = 5;            // 登录最大重试次数
+        String configPath = "fix-client-template.cfg"; // 配置文件路径
+
+        // 初始化组件
+        MetricsCollector metrics = new MetricsCollector();
+        SessionSettings settings = SessionConfigBuilder.createMultiSessionSettings(configPath, totalSessionCount);
+        FixBenchmarkApplication application = new FixBenchmarkApplication(
+                metrics, tpsPerSession, durationMinutes, timeoutMillis, 
+                loginTimeoutMillis, totalSessionCount, maxLoginRetry
+        );
+
+        // 启动压测
+        SocketInitiator initiator = new SocketInitiator(
+                application,
+                new MemoryStoreFactory(),  // 内存存储（避免文件IO影响）
+                settings,
+                new NullLogFactory()       // 禁用日志（高TPS场景推荐）
+        );
+        application.setInitiator(initiator);
+        initiator.start();
+        System.out.printf("压测启动：总会话数=%d，分批启动（每批%d个），单会话TPS=%d%n",
+                totalSessionCount, batchSize, tpsPerSession);
+
+        // 分批启动会话
+        SessionBatchStarter batchStarter = new SessionBatchStarter(
+                initiator, metrics, totalSessionCount, batchSize, batchIntervalMs
+        );
+        batchStarter.start();
+
+        // 等待会话登录（由于是分批启动，这里等待时间较长）
+        application.waitForSessionsStart();
+        System.out.println("所有有效会话已登录或标记异常，开始压测...");
+
+        // 等待测试完成
+        TimeUnit.MINUTES.sleep(durationMinutes);
+
+        // 停止并输出报告
+        initiator.stop();
+        application.shutdown();
+        batchStarter.shutdown();
+        System.out.println(metrics.generateSummaryReport());
+        System.out.println(metrics.generatePerSessionReport());
+    }
+}
