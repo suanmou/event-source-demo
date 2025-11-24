@@ -1,0 +1,46 @@
+public static void main(String[] args) throws Exception {
+    // 压测参数（支持200-500个会话）
+    int sessionCount = 500;          // 目标会话数（可调整为200/300/500）
+    int tpsPerSession = 10;          // 单会话TPS
+    long durationMinutes = 5;        // 测试持续时间
+    long timeoutMillis = 5000;       // 消息超时时间
+    int maxLoginRetry = 3;           // 登录最大重试次数
+    int connectionsPerSecond = 30;   // 每秒启动的Initiator数量（控制连接速率）
+    String configPath = "fix-client-template.cfg"; // 配置文件路径
+
+    // 1. 初始化Initiator池（每个会话对应1个Initiator）
+    InitiatorPool initiatorPool = new InitiatorPool(sessionCount, connectionsPerSecond);
+
+    // 2. 初始化指标收集器和应用
+    MetricsCollector metrics = new MetricsCollector();
+    FixBenchmarkApplication application = new FixBenchmarkApplication(
+            metrics, tpsPerSession, durationMinutes, timeoutMillis, maxLoginRetry, initiatorPool
+    );
+
+    // 3. 创建所有独立Initiator（每个对应1个Session）
+    initiatorPool.createInitiators(application, configPath);
+
+    // 4. 限流启动所有Initiator（每秒30个，500个约17秒启动完成）
+    System.out.printf("开始启动%d个独立Initiator，速率：%d个/秒%n", sessionCount, connectionsPerSecond);
+    initiatorPool.startWithRateLimit();
+
+    // 5. 等待所有会话连接成功（最多等待10分钟）
+    initiatorPool.waitForAllConnected(10);
+
+    // 6. 输出连接结果
+    System.out.printf("%n连接结果：成功%d个，失败%d个，成功率：%.2f%%%n",
+            initiatorPool.getConnectedCount(),
+            sessionCount - initiatorPool.getConnectedCount(),
+            (double) initiatorPool.getConnectedCount() / sessionCount * 100
+    );
+
+    // 7. 开始压测（等待指定时长）
+    System.out.printf("开始压测，持续%d分钟...%n", durationMinutes);
+    TimeUnit.MINUTES.sleep(durationMinutes);
+
+    // 8. 停止压测，输出报告
+    initiatorPool.shutdownAll();
+    application.shutdown();
+    System.out.println(metrics.generateSummaryReport());
+    System.out.println(metrics.generatePerSessionReport());
+}
