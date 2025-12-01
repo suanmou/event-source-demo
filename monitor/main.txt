@@ -1,0 +1,412 @@
+import subprocess
+import re
+import time
+import json
+import datetime
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from collections import defaultdict, deque
+import socket
+
+class RealTimeFIXMonitor:
+    def __init__(self, target_servers, fix_port=9876, check_interval=5):
+        """
+        实时FIX连接监控器
+        :param target_servers: 下游服务器列表
+        :param fix_port: FIX协议端口
+        :param check_interval: 检查间隔(秒)
+        """
+        self.target_servers = target_servers
+        self.fix_port = fix_port
+        self.check_interval = check_interval
+        
+        # 实时数据存储
+        self.active_connections = set()
+        self.connection_history = {}
+        self.metrics_history = deque(maxlen=720)  # 保存最近1小时数据(5秒间隔)
+        
+        # 统计信息
+        self.stats = {
+            'total_connections': 0,
+            'current_connections': 0,
+            'max_concurrent': 0,
+            'avg_duration': 0,
+            'uptime': datetime.datetime.now()
+        }
+        
+        # 线程控制
+        self.monitor_thread = None
+        self.running = False
+        
+        # 初始化历史记录文件
+        self.history_file = "fix_connections.json"
+        self.load_history()
+
+    def load_history(self):
+        """加载历史连接记录"""
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, 'r') as f:
+                    data = json.load(f)
+                    self.connection_history = {
+                        k: {
+                            **v,
+                            'start_time': datetime.datetime.fromisoformat(v['start_time']),
+                            'end_time': datetime.datetime.fromisoformat(v['end_time']) if v['end_time'] else None
+                        }
+                        for k, v in data.items()
+                    }
+        except Exception as e:
+            print(f"加载历史记录失败: {e}")
+
+    def save_history(self):
+        """保存连接历史记录"""
+        try:
+            with open(self.history_file, 'w') as f:
+                serializable_data = {
+                    k: {
+                        **v,
+                        'start_time': v['start_time'].isoformat(),
+                        'end_time': v['end_time'].isoformat() if v['end_time'] else None
+                    }
+                    for k, v in self.connection_history.items()
+                }
+                json.dump(serializable_data, f, indent=2)
+        except Exception as e:
+            print(f"保存历史记录失败: {e}")
+
+    def get_network_connections(self):
+        """获取网络连接信息"""
+        try:
+            # 尝试多种方法获取连接信息
+            commands = [
+                ['ss', '-tun'],
+                ['netstat', '-tunp'],
+                ['netstat', '-an']
+            ]
+            
+            for cmd in commands:
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0:
+                        return result.stdout
+                except:
+                    continue
+            return ""
+        except Exception as e:
+            print(f"获取网络连接失败: {e}")
+            return ""
+
+    def parse_fix_connections(self, netstat_output):
+        """解析FIX连接"""
+        connections = []
+        target_patterns = [f"{ip}:{port}" for ip, port in self.target_servers]
+        
+        for line in netstat_output.split('\n'):
+            if any(pattern in line for pattern in target_patterns) and ('ESTAB' in line or 'ESTABLISHED' in line):
+                # 提取连接信息
+                ip_pattern = r'(\d+\.\d+\.\d+\.\d+):(\d+)'
+                matches = re.findall(ip_pattern, line)
+                
+                if len(matches) >= 2:
+                    local_ip, local_port = matches[0]
+                    remote_ip, remote_port = matches[1]
+                    
+                    # 验证是否为目标服务器连接
+                    for target_ip, target_port in self.target_servers:
+                        if remote_ip == target_ip and int(remote_port) == target_port:
+                            connection_id = f"{local_ip}:{local_port}->{remote_ip}:{remote_port}"
+                            connections.append({
+                                'id': connection_id,
+                                'local_ip': local_ip,
+                                'local_port': local_port,
+                                'remote_ip': remote_ip,
+                                'remote_port': remote_port,
+                                'timestamp': datetime.datetime.now()
+                            })
+                            break
+        
+        return connections
+
+    def update_connection_tracking(self, current_connections):
+        """更新连接跟踪"""
+        current_ids = {conn['id'] for conn in current_connections}
+        
+        # 检测新连接
+        for conn in current_connections:
+            if conn['id'] not in self.connection_history:
+                self.connection_history[conn['id']] = {
+                    'start_time': conn['timestamp'],
+                    'end_time': None,
+                    'local_ip': conn['local_ip'],
+                    'local_port': conn['local_port'],
+                    'remote_ip': conn['remote_ip'],
+                    'remote_port': conn['remote_port'],
+                    'duration': 0
+                }
+                self.stats['total_connections'] += 1
+                print(f"新连接建立: {conn['id']}")
+        
+        # 检测断开连接
+        disconnected = self.active_connections - current_ids
+        for conn_id in disconnected:
+            if conn_id in self.connection_history:
+                self.connection_history[conn_id]['end_time'] = datetime.datetime.now()
+                start_time = self.connection_history[conn_id]['start_time']
+                end_time = self.connection_history[conn_id]['end_time']
+                duration = (end_time - start_time).total_seconds()
+                self.connection_history[conn_id]['duration'] = duration
+                print(f"连接断开: {conn_id} (时长: {duration:.2f}s)")
+        
+        self.active_connections = current_ids
+        self.stats['current_connections'] = len(current_connections)
+        self.stats['max_concurrent'] = max(self.stats['max_concurrent'], len(current_connections))
+
+    def calculate_metrics(self):
+        """计算实时指标"""
+        current_time = datetime.datetime.now()
+        
+        # 计算平均连接时长
+        durations = []
+        for conn_id in self.active_connections:
+            if conn_id in self.connection_history:
+                start_time = self.connection_history[conn_id]['start_time']
+                duration = (current_time - start_time).total_seconds()
+                durations.append(duration)
+        
+        avg_duration = sum(durations) / len(durations) if durations else 0
+        self.stats['avg_duration'] = avg_duration
+        
+        # 记录历史指标
+        metrics_point = {
+            'timestamp': current_time.isoformat(),
+            'active_connections': len(self.active_connections),
+            'avg_duration': avg_duration,
+            'total_connections': self.stats['total_connections']
+        }
+        self.metrics_history.append(metrics_point)
+
+    def monitor_loop(self):
+        """监控主循环"""
+        while self.running:
+            try:
+                # 获取连接信息
+                netstat_output = self.get_network_connections()
+                
+                if netstat_output:
+                    # 解析FIX连接
+                    fix_connections = self.parse_fix_connections(netstat_output)
+                    
+                    # 更新连接跟踪
+                    self.update_connection_tracking(fix_connections)
+                    
+                    # 计算指标
+                    self.calculate_metrics()
+                
+                time.sleep(self.check_interval)
+                
+            except Exception as e:
+                print(f"监控循环错误: {e}")
+                time.sleep(self.check_interval)
+
+    def start_monitoring(self):
+        """开始监控"""
+        if self.running:
+            return
+        
+        self.running = True
+        self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
+        self.monitor_thread.start()
+        print("FIX连接监控已启动")
+
+    def stop_monitoring(self):
+        """停止监控"""
+        self.running = False
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=10)
+        self.save_history()
+        print("FIX连接监控已停止")
+
+    def get_current_metrics(self):
+        """获取当前指标"""
+        return {
+            'current_connections': self.stats['current_connections'],
+            'total_connections': self.stats['total_connections'],
+            'max_concurrent': self.stats['max_concurrent'],
+            'avg_duration': self.stats['avg_duration'],
+            'uptime': (datetime.datetime.now() - self.stats['uptime']).total_seconds(),
+            'active_connections_list': list(self.active_connections)
+        }
+
+    def get_metrics_history(self, minutes=60):
+        """获取历史指标数据"""
+        cutoff_time = datetime.datetime.now() - datetime.timedelta(minutes=minutes)
+        return [
+            point for point in self.metrics_history
+            if datetime.datetime.fromisoformat(point['timestamp']) > cutoff_time
+        ]
+
+class MetricsHTTPHandler(BaseHTTPRequestHandler):
+    """HTTP API处理器"""
+    
+    def __init__(self, monitor, *args, **kwargs):
+        self.monitor = monitor
+        super().__init__(*args, **kwargs)
+    
+    def do_GET(self):
+        """处理GET请求"""
+        try:
+            if self.path == '/metrics':
+                self.serve_metrics()
+            elif self.path == '/connections':
+                self.serve_connections()
+            elif self.path == '/health':
+                self.serve_health()
+            elif self.path == '/history':
+                self.serve_history()
+            else:
+                self.serve_404()
+        except Exception as e:
+            self.send_error(500, f"Internal Server Error: {e}")
+    
+    def serve_metrics(self):
+        """提供Prometheus格式的指标"""
+        metrics = self.monitor.get_current_metrics()
+        
+        prometheus_metrics = [
+            f"# HELP fix_active_connections Current number of active FIX connections",
+            f"# TYPE fix_active_connections gauge",
+            f"fix_active_connections {metrics['current_connections']}",
+            "",
+            f"# HELP fix_total_connections Total number of FIX connections tracked",
+            f"# TYPE fix_total_connections counter",
+            f"fix_total_connections {metrics['total_connections']}",
+            "",
+            f"# HELP fix_max_concurrent Maximum concurrent FIX connections",
+            f"# TYPE fix_max_concurrent gauge",
+            f"fix_max_concurrent {metrics['max_concurrent']}",
+            "",
+            f"# HELP fix_avg_duration_seconds Average connection duration in seconds",
+            f"# TYPE fix_avg_duration_seconds gauge",
+            f"fix_avg_duration_seconds {metrics['avg_duration']:.2f}",
+            "",
+            f"# HELP fix_uptime_seconds Monitor uptime in seconds",
+            f"# TYPE fix_uptime_seconds gauge",
+            f"fix_uptime_seconds {metrics['uptime']:.2f}"
+        ]
+        
+        response = "\n".join(prometheus_metrics)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; version=0.0.4')
+        self.end_headers()
+        self.wfile.write(response.encode('utf-8'))
+    
+    def serve_connections(self):
+        """提供当前连接信息"""
+        metrics = self.monitor.get_current_metrics()
+        
+        response = {
+            'status': 'success',
+            'data': {
+                'current_connections': metrics['current_connections'],
+                'active_connections': metrics['active_connections_list'],
+                'total_tracked': metrics['total_connections'],
+                'max_concurrent': metrics['max_concurrent'],
+                'average_duration_seconds': metrics['avg_duration']
+            }
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(response, indent=2).encode('utf-8'))
+    
+    def serve_health(self):
+        """健康检查端点"""
+        response = {
+            'status': 'healthy',
+            'timestamp': datetime.datetime.now().isoformat(),
+            'monitor_running': self.monitor.running
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode('utf-8'))
+    
+    def serve_history(self):
+        """提供历史数据"""
+        history = self.monitor.get_metrics_history(60)  # 最近60分钟数据
+        
+        response = {
+            'status': 'success',
+            'data': history
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(response, indent=2).encode('utf-8'))
+    
+    def serve_404(self):
+        """404处理"""
+        self.send_response(404)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        response = {'error': 'Endpoint not found', 'available_endpoints': ['/metrics', '/connections', '/health', '/history']}
+        self.wfile.write(json.dumps(response).encode('utf-8'))
+    
+    def log_message(self, format, *args):
+        """自定义日志格式"""
+        print(f"[{datetime.datetime.now().isoformat()}] {format % args}")
+
+def start_http_server(monitor, port=8080):
+    """启动HTTP服务器"""
+    def handler(*args, **kwargs):
+        MetricsHTTPHandler(monitor, *args, **kwargs)
+    
+    server = HTTPServer(('0.0.0.0', port), handler)
+    print(f"HTTP服务器启动在端口 {port}")
+    print("可用端点:")
+    print("  GET /metrics    - Prometheus格式指标")
+    print("  GET /connections - 当前连接信息")
+    print("  GET /health     - 健康检查")
+    print("  GET /history    - 历史数据")
+    
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("HTTP服务器停止")
+    finally:
+        server.server_close()
+
+def main():
+    """主函数"""
+    # 配置下游服务器
+    target_servers = [
+        ('192.168.1.100', 9876),  # 替换为实际IP和端口
+        ('192.168.1.101', 9876),
+        ('10.0.1.50', 9876)
+    ]
+    
+    # 创建监控器
+    monitor = RealTimeFIXMonitor(
+        target_servers=target_servers,
+        fix_port=9876,
+        check_interval=5  # 5秒检查一次
+    )
+    
+    # 启动监控
+    monitor.start_monitoring()
+    
+    try:
+        # 启动HTTP服务器
+        start_http_server(monitor, port=8080)
+    except KeyboardInterrupt:
+        print("收到停止信号...")
+    finally:
+        monitor.stop_monitoring()
+
+if __name__ == "__main__":
+    main()

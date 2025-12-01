@@ -1,0 +1,70 @@
+{
+  "dashboard": {
+    "title": "FIX连接监控",
+    "panels": [
+      {
+        "title": "活跃FIX连接数",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "fix_active_connections",
+            "legendFormat": "当前连接数"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "red", "value": 10}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "FIX连接趋势",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "fix_active_connections",
+            "legendFormat": "活跃连接"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"}
+          }
+        }
+      },
+      {
+        "title": "平均连接时长",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "fix_avg_duration_seconds",
+            "legendFormat": "平均时长(秒)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "decimals": 2
+          }
+        }
+      },
+      {
+        "title": "最大并发连接",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "fix_max_concurrent",
+            "legendFormat": "最大并发"
+          }
+        ]
+      }
+    ],
+    "refresh": "5s"
+  }
+}

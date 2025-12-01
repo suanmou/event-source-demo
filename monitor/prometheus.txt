@@ -1,0 +1,6 @@
+# prometheus.yml
+scrape_configs:
+  - job_name: 'fix_monitor'
+    static_configs:
+      - targets: ['your-server-ip:8080']
+    scrape_interval: 15s

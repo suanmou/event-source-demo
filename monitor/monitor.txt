@@ -1,0 +1,226 @@
+import os
+import re
+import time
+import socket
+import logging
+import subprocess
+from typing import List, Tuple, Optional
+
+# ==================== 配置参数（根据实际环境修改）====================
+DOWNSTREAM_IP = "10.0.0.10"  # 下游服务器内网IP（EDMZ内可达）
+FIX_PORT = 9876  # 下游FIX服务监听端口
+MONITOR_INTERVAL = 10  # 监控间隔（秒）
+LOG_FILE = "/var/log/fix_connection_monitor.log"
+FIX_VERSIONS = ["FIX.4.2", "FIX.4.4"]  # 支持的FIX协议版本（按需调整）
+READ_TIMEOUT = 1  # 读取连接数据超时时间（秒）
+# ====================================================================
+
+def init_logger():
+    """初始化日志（仅用Python基础logging包）"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - [FIX监控] - %(levelname)s - 有效连接数: %(message)s",
+        handlers=[
+            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+            logging.StreamHandler()
+        ]
+    )
+
+def get_tcp_connections() -> List[dict]:
+    """
+    调用系统ss命令，获取目标TCP连接（ESTABLISHED + 目标IP+端口）
+    返回格式：[{"inode": 123456, "pid": 789, "laddr": ("10.0.0.10", 9876), "raddr": ("192.168.1.2", 54321)}]
+    """
+    tcp_connections = []
+    # 执行ss命令：筛选TCP、ESTABLISHED状态、目标端口，输出inode和PID
+    # ss命令参数说明：
+    # -t: TCP协议；-s: 显示状态；-o ino: 输出inode；-p: 输出PID和进程名
+    cmd = [
+        "ss", "-t", "state", "established",
+        f"( sport = :{FIX_PORT} )",  # 筛选本地端口（下游服务器监听端口）
+        "-o", "ino,pn"
+    ]
+    
+    try:
+        # 执行命令，捕获输出（纯基础包subprocess）
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode != 0:
+            logging.error(f"执行ss命令失败: {result.stderr.strip()}")
+            return tcp_connections
+        
+        # 解析ss命令输出（正则匹配关键信息）
+        # 输出示例：ESTAB      0      0               10.0.0.10:9876            192.168.1.2:54321    ino:123456 sk:abc pid:789 process:fixserver
+        pattern = re.compile(
+            r"ESTAB\s+\d+\s+\d+\s+(\S+):(\d+)\s+(\S+):(\d+)\s+ino:(\d+)\s+sk:\S+\s+pid:(\d+)\s+process:(\S+)"
+        )
+        
+        for line in result.stdout.strip().split("\n"):
+            match = pattern.match(line.strip())
+            if not match:
+                continue  # 跳过无效行
+            
+            laddr_ip = match.group(1)
+            laddr_port = int(match.group(2))
+            raddr_ip = match.group(3)
+            raddr_port = int(match.group(4))
+            inode = int(match.group(5))
+            pid = int(match.group(6))
+            
+            # 仅保留本地IP为目标下游IP的连接（避免多网卡场景误匹配）
+            if laddr_ip == DOWNSTREAM_IP:
+                tcp_connections.append({
+                    "inode": inode,
+                    "pid": pid,
+                    "laddr": (laddr_ip, laddr_port),
+                    "raddr": (raddr_ip, raddr_port)
+                })
+        
+        return tcp_connections
+    
+    except subprocess.TimeoutExpired:
+        logging.error("执行ss命令超时")
+        return tcp_connections
+    except Exception as e:
+        logging.error(f"获取TCP连接失败: {str(e)}")
+        return tcp_connections
+
+def find_fd_by_inode(pid: int, target_inode: int) -> Optional[int]:
+    """
+    根据PID和inode，从/proc/[PID]/fd中找到对应的文件描述符（FD）
+    :param pid: 进程ID（FIX服务进程）
+    :param target_inode: TCP连接的inode号
+    :return: 找到的FD，未找到返回None
+    """
+    proc_fd_dir = f"/proc/{pid}/fd"
+    if not os.path.exists(proc_fd_dir):
+        logging.debug(f"进程PID={pid}的fd目录不存在")
+        return None
+    
+    try:
+        # 遍历/proc/[PID]/fd下的所有文件描述符
+        for fd_name in os.listdir(proc_fd_dir):
+            fd_path = os.path.join(proc_fd_dir, fd_name)
+            if not os.path.islink(fd_path):
+                continue  # 跳过非符号链接（仅关注socket fd）
+            
+            try:
+                # 读取符号链接目标（格式：socket:[123456]）
+                link_target = os.readlink(fd_path)
+                # 提取inode号（括号内的数字）
+                inode_match = re.search(r"socket:\[(\d+)\]", link_target)
+                if inode_match and int(inode_match.group(1)) == target_inode:
+                    return int(fd_name)  # 找到匹配的FD
+            except PermissionError:
+                logging.debug(f"无权限访问FD: {fd_path}（需root权限）")
+                continue
+            except Exception as e:
+                logging.debug(f"解析FD链接失败: {str(e)}")
+                continue
+    except Exception as e:
+        logging.error(f"查找FD失败（PID={pid}）: {str(e)}")
+    
+    return None
+
+def is_fix_logged_in(fd: int) -> bool:
+    """
+    验证文件描述符对应的TCP连接是否已完成FIX登录（纯基础包实现）
+    :param fd: TCP连接的文件描述符
+    :return: True=已登录，False=未登录/验证失败
+    """
+    try:
+        # 从FD创建socket（复用现有TCP连接，不影响原连接）
+        # AF_INET=IPv4，SOCK_STREAM=TCP，0=默认协议
+        s = socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(READ_TIMEOUT)
+        s.setblocking(False)  # 非阻塞模式，避免卡住
+        
+        data = b""
+        try:
+            # 尝试读取2次数据（确保能捕获登录消息）
+            for _ in range(2):
+                chunk = s.recv(1024)  # 读取前1024字节（足够判断FIX登录）
+                if not chunk:
+                    break
+                data += chunk
+                # 读到关键标识后提前退出
+                if b"35=A" in data and any(f"8={v}".encode() in data for v in FIX_VERSIONS):
+                    break
+        except BlockingIOError:
+            # 非阻塞模式下无数据可读（登录消息已传输完成），不影响判断
+            pass
+        except Exception as e:
+            logging.debug(f"读取连接数据失败（FD={fd}）: {str(e)}")
+            return False
+        
+        s.close()  # 关闭临时socket，不影响原TCP连接
+        
+        # FIX登录成功判断条件（基础版，可按需调整）
+        # 1. 包含FIX协议版本（8=FIX.XX）；2. 包含登录消息类型（35=A）；3. 无错误描述（58=）
+        has_fix_version = any(f"8={v}".encode() in data for v in FIX_VERSIONS)
+        has_login_msg = b"35=A" in data
+        no_error = b"58=" not in data
+        
+        return has_fix_version and has_login_msg and no_error
+    
+    except PermissionError:
+        logging.debug(f"无权限操作FD={fd}（需root权限）")
+        return False
+    except Exception as e:
+        logging.debug(f"验证FIX登录失败（FD={fd}）: {str(e)}")
+        return False
+
+def count_valid_fix_connections() -> int:
+    """统计「TCP已建立 + FIX已登录」的有效连接数"""
+    valid_count = 0
+    tcp_conns = get_tcp_connections()
+    total_tcp = len(tcp_conns)
+    
+    for conn in tcp_conns:
+        inode = conn["inode"]
+        pid = conn["pid"]
+        raddr = conn["raddr"]
+        
+        # 第一步：根据PID和inode找到FD
+        fd = find_fd_by_inode(pid, inode)
+        if fd is None:
+            logging.debug(f"未找到连接（{raddr}）的文件描述符（PID={pid}, inode={inode}）")
+            continue
+        
+        # 第二步：验证FIX登录状态
+        if is_fix_logged_in(fd):
+            valid_count += 1
+            logging.debug(f"有效FIX连接: {raddr}（FD={fd}）")
+        else:
+            logging.debug(f"未登录的TCP连接: {raddr}（FD={fd}）")
+    
+    # 输出调试信息（TCP总连接数 vs 有效连接数）
+    logging.debug(f"TCP已建立连接数: {total_tcp} | 有效FIX登录连接数: {valid_count}")
+    return valid_count
+
+def main():
+    init_logger()
+    logging.info(
+        f"FIX有效连接监控启动（纯基础包）- "
+        f"下游服务器: {DOWNSTREAM_IP}:{FIX_PORT} - "
+        f"监控间隔: {MONITOR_INTERVAL}s"
+    )
+    
+    try:
+        while True:
+            valid_conn_num = count_valid_fix_connections()
+            logging.info(valid_conn_num)
+            time.sleep(MONITOR_INTERVAL)
+    except KeyboardInterrupt:
+        logging.info("监控程序手动停止")
+    except Exception as e:
+        logging.error(f"监控异常: {str(e)}")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,265 @@
+import os
+import re
+import time
+import socket
+import logging
+import subprocess
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import List, Dict, Tuple, Optional
+
+# ==================== 核心配置 ====================
+# 监控目标配置
+DOWNSTREAM_IP = "10.0.0.10"  # 下游服务器内网IP
+FIX_PORT = 9876  # FIX服务端口
+FIX_VERSIONS = ["FIX.4.2", "FIX.4.4"]  # 支持的FIX版本
+# 指标接口配置
+METRIC_HTTP_PORT = 8000  # Python程序暴露指标的端口（供Prometheus拉取）
+METRIC_HTTP_ADDR = "0.0.0.0"  # 监听所有网卡（EDMZ内可访问）
+# 其他配置
+MONITOR_INTERVAL = 5  # 内部统计间隔（秒，需≤Prometheus拉取间隔）
+LOG_FILE = "/var/log/fix_monitor_grafana.log"
+READ_TIMEOUT = 1
+# ==================================================
+
+# 全局变量：跟踪活跃连接（key=(client_ip, client_port), value=连接建立时间戳）
+active_connections: Dict[Tuple[str, int], float] = {}
+# 全局变量：存储最新监控结果（供HTTP接口快速返回）
+latest_metrics: Dict[str, any] = {
+    "total_valid": 0,
+    "clients": []  # 格式：[{"ip": "x.x.x.x", "port": 12345, "connect_time": 1699999999, "duration": 123}]
+}
+
+def init_logger():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - [FIX-Grafana监控] - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+            logging.StreamHandler()
+        ]
+    )
+
+def get_tcp_connections() -> List[dict]:
+    """调用ss命令获取目标TCP连接（ESTABLISHED + 下游IP+端口）"""
+    tcp_connections = []
+    cmd = [
+        "ss", "-t", "state", "established",
+        f"( sport = :{FIX_PORT} )",
+        "-o", "ino,pn"
+    ]
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            logging.error(f"ss命令执行失败: {result.stderr.strip()}")
+            return tcp_connections
+        
+        pattern = re.compile(
+            r"ESTAB\s+\d+\s+\d+\s+(\S+):(\d+)\s+(\S+):(\d+)\s+ino:(\d+)\s+sk:\S+\s+pid:(\d+)\s+process:(\S+)"
+        )
+        for line in result.stdout.strip().split("\n"):
+            match = pattern.match(line.strip())
+            if not match:
+                continue
+            laddr_ip = match.group(1)
+            laddr_port = int(match.group(2))
+            raddr_ip = match.group(3)
+            raddr_port = int(match.group(4))
+            inode = int(match.group(5))
+            pid = int(match.group(6))
+            if laddr_ip == DOWNSTREAM_IP:
+                tcp_connections.append({
+                    "inode": inode, "pid": pid,
+                    "laddr": (laddr_ip, laddr_port),
+                    "raddr": (raddr_ip, raddr_port)  # raddr=(客户端IP, 客户端端口)
+                })
+        return tcp_connections
+    except Exception as e:
+        logging.error(f"获取TCP连接失败: {str(e)}")
+        return tcp_connections
+
+def find_fd_by_inode(pid: int, target_inode: int) -> Optional[int]:
+    """根据PID和inode查找文件描述符（FD）"""
+    proc_fd_dir = f"/proc/{pid}/fd"
+    if not os.path.exists(proc_fd_dir):
+        return None
+    try:
+        for fd_name in os.listdir(proc_fd_dir):
+            fd_path = os.path.join(proc_fd_dir, fd_name)
+            if not os.path.islink(fd_path):
+                continue
+            try:
+                link_target = os.readlink(fd_path)
+                inode_match = re.search(r"socket:\[(\d+)\]", link_target)
+                if inode_match and int(inode_match.group(1)) == target_inode:
+                    return int(fd_name)
+            except PermissionError:
+                continue
+            except Exception as e:
+                logging.debug(f"解析FD链接失败: {str(e)}")
+                continue
+    except Exception as e:
+        logging.error(f"查找FD失败（PID={pid}）: {str(e)}")
+    return None
+
+def is_fix_logged_in(fd: int) -> bool:
+    """验证FIX登录状态"""
+    try:
+        s = socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(READ_TIMEOUT)
+        s.setblocking(False)
+        data = b""
+        try:
+            for _ in range(2):
+                chunk = s.recv(1024)
+                if not chunk:
+                    break
+                data += chunk
+                if b"35=A" in data and any(f"8={v}".encode() in data for v in FIX_VERSIONS):
+                    break
+        except BlockingIOError:
+            pass
+        except Exception as e:
+            logging.debug(f"读取连接数据失败（FD={fd}）: {str(e)}")
+            return False
+        s.close()
+        
+        has_version = any(f"8={v}".encode() in data for v in FIX_VERSIONS)
+        has_login = b"35=A" in data
+        no_error = b"58=" not in data
+        return has_version and has_login and no_error
+    except Exception as e:
+        logging.debug(f"验证登录失败（FD={fd}）: {str(e)}")
+        return False
+
+def update_active_connections():
+    """更新活跃连接状态（记录连接建立时间、清理断开连接）"""
+    global active_connections, latest_metrics
+    tcp_conns = get_tcp_connections()
+    current_valid_clients = []  # 当前有效（TCP+FIX登录）的客户端
+    
+    # 第一步：筛选有效连接（TCP已连 + FIX已登录）
+    for conn in tcp_conns:
+        client_ip, client_port = conn["raddr"]
+        inode = conn["inode"]
+        pid = conn["pid"]
+        fd = find_fd_by_inode(pid, inode)
+        if fd is None:
+            continue
+        if is_fix_logged_in(fd):
+            current_valid_clients.append((client_ip, client_port))
+    
+    # 第二步：更新活跃连接字典（新增连接记录时间，删除断开连接）
+    current_time = time.time()
+    new_active_connections = {}
+    for client in current_valid_clients:
+        if client not in active_connections:
+            # 新连接：记录建立时间戳
+            active_connections[client] = current_time
+            logging.info(f"新增有效FIX连接: {client[0]}:{client[1]}")
+        # 保留活跃连接
+        new_active_connections[client] = active_connections[client]
+    
+    # 清理已断开的连接
+    disconnected = set(active_connections.keys()) - set(new_active_connections.keys())
+    for client in disconnected:
+        logging.info(f"断开FIX连接: {client[0]}:{client[1]}")
+    active_connections = new_active_connections
+    
+    # 第三步：计算连接时长，更新最新指标
+    clients_metrics = []
+    for (client_ip, client_port), connect_ts in active_connections.items():
+        duration = int(current_time - connect_ts)  # 连接时长（秒）
+        clients_metrics.append({
+            "ip": client_ip,
+            "port": client_port,
+            "connect_time": connect_ts,
+            "duration": duration
+        })
+    
+    # 更新全局指标（供HTTP接口使用）
+    latest_metrics = {
+        "total_valid": len(clients_metrics),
+        "clients": clients_metrics
+    }
+    logging.debug(f"当前有效连接数: {latest_metrics['total_valid']} | 客户端: {[c['ip']+':'+str(c['port']) for c in clients_metrics]}")
+
+class PrometheusMetricsHandler(BaseHTTPRequestHandler):
+    """HTTP请求处理器：返回Prometheus格式的指标"""
+    def do_GET(self):
+        if self.path == "/metrics":
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain; charset=utf-8")
+            self.end_headers()
+            
+            # 生成Prometheus指标（按Prometheus文本格式规范）
+            metrics_lines = []
+            current_time = time.time()
+            
+            # 1. 总有效连接数（gauge类型：可增可减的数值）
+            metrics_lines.append(f"# HELP fix_connected_clients_total 有效FIX连接总数（已TCP连接+FIX登录）")
+            metrics_lines.append(f"# TYPE fix_connected_clients_total gauge")
+            metrics_lines.append(f"fix_connected_clients_total {latest_metrics['total_valid']}\n")
+            
+            # 2. 客户端连接信息（带IP+端口标签，1=活跃，0=断开）
+            metrics_lines.append(f"# HELP fix_client_connection_status 客户端连接状态（1=活跃）")
+            metrics_lines.append(f"# TYPE fix_client_connection_status gauge")
+            # 3. 客户端连接时长（秒）
+            metrics_lines.append(f"# HELP fix_client_connection_duration_seconds 客户端连接时长（秒）")
+            metrics_lines.append(f"# TYPE fix_client_connection_duration_seconds gauge")
+            
+            for client in latest_metrics["clients"]:
+                labels = f'client_ip="{client["ip"]}",client_port="{client["port"]}"'
+                metrics_lines.append(f"fix_client_connection_status{{{labels}}} 1")
+                metrics_lines.append(f"fix_client_connection_duration_seconds{{{labels}}} {client['duration']}")
+            
+            # 4. 连接建立时间（时间戳，便于Grafana格式化显示）
+            metrics_lines.append(f"\n# HELP fix_client_connection_start_time_seconds 客户端连接建立时间戳（Unix时间）")
+            metrics_lines.append(f"# TYPE fix_client_connection_start_time_seconds gauge")
+            for client in latest_metrics["clients"]:
+                labels = f'client_ip="{client["ip"]}",client_port="{client["port"]}"'
+                metrics_lines.append(f"fix_client_connection_start_time_seconds{{{labels}}} {client['connect_time']}")
+            
+            # 发送指标数据
+            metrics_data = "\n".join(metrics_lines)
+            self.wfile.write(metrics_data.encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"404 - Only /metrics endpoint is supported")
+
+def run_metrics_server():
+    """启动HTTP指标服务器（后台线程运行，不阻塞监控逻辑）"""
+    server_address = (METRIC_HTTP_ADDR, METRIC_HTTP_PORT)
+    httpd = HTTPServer(server_address, PrometheusMetricsHandler)
+    logging.info(f"Prometheus指标接口启动: http://{METRIC_HTTP_ADDR}:{METRIC_HTTP_PORT}/metrics")
+    # 非阻塞运行HTTP服务器（避免占用主线程）
+    import threading
+    server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    server_thread.start()
+    return httpd
+
+def main():
+    init_logger()
+    # 启动HTTP指标服务器
+    httpd = run_metrics_server()
+    # 启动监控循环（定期更新连接状态）
+    logging.info(
+        f"FIX监控程序启动 - 下游服务器: {DOWNSTREAM_IP}:{FIX_PORT} - "
+        f"监控间隔: {MONITOR_INTERVAL}s - 指标端口: {METRIC_HTTP_PORT}"
+    )
+    try:
+        while True:
+            update_active_connections()
+            time.sleep(MONITOR_INTERVAL)
+    except KeyboardInterrupt:
+        logging.info("监控程序手动停止")
+    except Exception as e:
+        logging.error(f"监控异常: {str(e)}")
+    finally:
+        httpd.shutdown()
+        logging.info("指标服务器已关闭")
+
+if __name__ == "__main__":
+    main()
