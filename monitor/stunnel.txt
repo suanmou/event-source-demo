@@ -1,0 +1,355 @@
+import socket
+import struct
+import time
+import sys
+import argparse
+from collections import defaultdict
+import fileinput
+import re
+
+# FIX协议常量（与之前一致）
+FIX_SOH = b'\x01'
+FIX_LOGON_MSG_TYPE = b'A'
+FIX_LOGOUT_MSG_TYPE = b'5'
+FIX_MSGTYPE_TAG = b'35='
+
+# stunnel日志解析正则（匹配连接映射：客户端→stunnel→下游）
+# 示例日志行：2025.01.01 10:00:00 LOG5[2000:12345]: CONNECTED: [10.0.0.1:54321] → [192.168.1.100:9876]
+STUNNEL_CONNECT_PATTERN = re.compile(
+    r'CONNECTED: \[(?P<client_ip>[0-9.]+):(?P<client_port>\d+)\] → \[(?P<downstream_ip>[0-9.]+):(?P<downstream_port>\d+)\]'
+)
+# 示例日志行：2025.01.01 10:05:00 LOG5[2000:12345]: CLOSED: [10.0.0.1:54321] → [192.168.1.100:9876]
+STUNNEL_CLOSE_PATTERN = re.compile(
+    r'CLOSED: \[(?P<client_ip>[0-9.]+):(?P<client_port>\d+)\] → \[(?P<downstream_ip>[0-9.]+):(?P<downstream_port>\d+)\]'
+)
+
+# 默认配置
+DEFAULT_STUNNEL_LISTEN_PORT = 9876  # stunnel监听端口（客户端连接端）
+DEFAULT_DOWNSTREAM_SERVERS = []  # 下游服务器（需与stunnel.conf的connect一致）
+DEFAULT_STUNNEL_LOG = "/var/log/stunnel/stunnel.log"  # stunnel日志路径
+DEFAULT_MONITOR_INTERVAL = 60  # 统计间隔（秒）
+DEFAULT_TIMEOUT = 300  # 连接超时（秒）
+DEFAULT_LOG_OUTPUT = "stdout"
+
+
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description="stunnel代理场景-FIX已登录连接监控（无第三方依赖）")
+    parser.add_argument(
+        "-d", "--downstreams",
+        type=str,
+        nargs="+",
+        required=True,
+        help="下游FIX服务器（必填，需与stunnel.conf的connect一致），格式：IP:端口，例：192.168.1.100:9876"
+    )
+    parser.add_argument(
+        "-l", "--stunnel-listen",
+        type=int,
+        default=DEFAULT_STUNNEL_LISTEN_PORT,
+        help=f"stunnel监听端口（客户端连接端），默认：{DEFAULT_STUNNEL_LISTEN_PORT}"
+    )
+    parser.add_argument(
+        "-s", "--stunnel-log",
+        type=str,
+        default=DEFAULT_STUNNEL_LOG,
+        help=f"stunnel日志文件路径，默认：{DEFAULT_STUNNEL_LOG}"
+    )
+    parser.add_argument(
+        "-i", "--interval",
+        type=int,
+        default=DEFAULT_MONITOR_INTERVAL,
+        help=f"统计输出间隔（秒），默认：{DEFAULT_MONITOR_INTERVAL}"
+    )
+    parser.add_argument(
+        "-t", "--timeout",
+        type=int,
+        default=DEFAULT_TIMEOUT,
+        help=f"连接超时时间（秒），默认：{DEFAULT_TIMEOUT}"
+    )
+    parser.add_argument(
+        "-o", "--output-log",
+        type=str,
+        default=DEFAULT_LOG_OUTPUT,
+        help=f"监控日志输出方式，stdout（控制台）或文件路径，默认：{DEFAULT_LOG_OUTPUT}"
+    )
+    return parser.parse_args()
+
+
+def validate_servers(servers_str):
+    """验证服务器格式（IP:端口）"""
+    valid_servers = []
+    for s in servers_str:
+        if ":" not in s:
+            print(f"❌ 无效服务器格式：{s}，正确格式：IP:端口", file=sys.stderr)
+            sys.exit(1)
+        ip, port_str = s.split(":", 1)
+        try:
+            port = int(port_str)
+            if not (1 <= port <= 65535):
+                raise ValueError
+            valid_servers.append((ip, port))
+        except ValueError:
+            print(f"❌ 无效端口：{port_str}，需为1-65535的整数", file=sys.stderr)
+            sys.exit(1)
+    return valid_servers
+
+
+def get_os_type():
+    """获取操作系统类型（linux/windows）"""
+    os_name = sys.platform.lower()
+    return "linux" if os_name.startswith("linux") else "windows" if os_name.startswith("win") else None
+
+
+def init_raw_socket(os_type):
+    """初始化原始套接字（抓stunnel→下游的明文流量）"""
+    try:
+        if os_type == "linux":
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0800))
+        elif os_type == "windows":
+            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+            sock.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+        else:
+            raise NotImplementedError(f"❌ 不支持的操作系统：{os_type}")
+        return sock
+    except PermissionError:
+        print("❌ 权限不足！请以管理员（Windows）或root（Linux）身份运行", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ 初始化抓包socket失败：{str(e)}", file=sys.stderr)
+        sys.exit(1)
+
+
+def parse_tcp_packet(data):
+    """解析TCP数据包，提取源IP:端口、目标IP:端口、负载数据"""
+    try:
+        # 解析IP头
+        ip_header = data[:20]
+        iph = struct.unpack('!BBHHHBBH4s4s', ip_header)
+        if iph[6] != 6:  # 仅处理TCP协议
+            return None
+        src_ip = socket.inet_ntoa(iph[8])
+        dst_ip = socket.inet_ntoa(iph[9])
+        ip_header_len = (iph[0] & 0x0F) * 4
+
+        # 解析TCP头
+        tcp_header = data[ip_header_len:ip_header_len+20]
+        tcph = struct.unpack('!HHLLBBHHH', tcp_header)
+        src_port = tcph[0]
+        dst_port = tcph[1]
+        tcp_header_len = ((tcph[4] & 0xF0) >> 4) * 4
+
+        # 提取TCP负载（FIX消息）
+        tcp_data = data[ip_header_len + tcp_header_len:]
+        return {
+            'src': (src_ip, src_port),
+            'dst': (dst_ip, dst_port),
+            'data': tcp_data
+        } if tcp_data else None
+    except Exception:
+        return None
+
+
+def parse_fix_msg_type(tcp_data):
+    """解析FIX消息的MsgType（登录/登出）"""
+    fields = tcp_data.split(FIX_SOH)
+    for field in fields:
+        if field.startswith(FIX_MSGTYPE_TAG):
+            msg_type = field[len(FIX_MSGTYPE_TAG):].decode('ascii', errors='ignore')
+            return msg_type if msg_type in ['A', '5'] else None
+    return None
+
+
+def parse_stunnel_log(log_path, client_forward_map, forward_client_map):
+    """实时解析stunnel日志，更新连接映射（客户端→转发连接）"""
+    try:
+        # 以尾部跟随模式读取日志（类似tail -f）
+        for line in fileinput.input(log_path, follow=True):
+            line = line.strip()
+            # 匹配连接建立日志（客户端→下游）
+            connect_match = STUNNEL_CONNECT_PATTERN.search(line)
+            if connect_match:
+                client_ip = connect_match.group('client_ip')
+                client_port = int(connect_match.group('client_port'))
+                downstream_ip = connect_match.group('downstream_ip')
+                downstream_port = int(connect_match.group('downstream_port'))
+                client_key = (client_ip, client_port)
+                # 转发连接的标识：stunnel出口IP:端口→下游IP:端口（stunnel出口IP需后续通过抓包补充）
+                # 先暂存客户端与下游的映射，后续抓包时匹配下游信息
+                client_forward_map[client_key] = {
+                    'downstream': (downstream_ip, downstream_port),
+                    'forward_key': None,  # 后续由抓包填充（stunnel_src_ip:stunnel_src_port）
+                    'last_active': time.time()
+                }
+                print(f"ℹ️  stunnel连接建立：{client_key[0]}:{client_key[1]} → {downstream_ip}:{downstream_port}")
+            
+            # 匹配连接关闭日志
+            close_match = STUNNEL_CLOSE_PATTERN.search(line)
+            if close_match:
+                client_ip = close_match.group('client_ip')
+                client_port = int(close_match.group('client_port'))
+                client_key = (client_ip, client_port)
+                if client_key in client_forward_map:
+                    # 移除关闭的连接映射
+                    forward_key = client_forward_map[client_key]['forward_key']
+                    if forward_key in forward_client_map:
+                        del forward_client_map[forward_key]
+                    del client_forward_map[client_key]
+                    print(f"ℹ️  stunnel连接关闭：{client_ip}:{client_port}")
+    except FileNotFoundError:
+        print(f"❌ stunnel日志文件不存在：{log_path}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"⚠️  解析stunnel日志异常：{str(e)}", file=sys.stderr)
+
+
+def associate_forward_connection(tcp_info, client_forward_map, forward_client_map):
+    """关联转发连接（stunnel→下游）与客户端连接（客户端→stunnel）"""
+    forward_src = tcp_info['src']  # stunnel出口IP:端口
+    forward_dst = tcp_info['dst']  # 下游IP:端口
+    forward_key = (f"{forward_src[0]}:{forward_src[1]}", f"{forward_dst[0]}:{forward_dst[1]}")
+
+    # 遍历客户端映射，匹配下游信息，关联转发连接
+    for client_key, info in client_forward_map.items():
+        if info['downstream'] == forward_dst and info['forward_key'] is None:
+            info['forward_key'] = forward_key
+            info['last_active'] = time.time()
+            forward_client_map[forward_key] = client_key
+            print(f"ℹ️  连接关联成功：{client_key[0]}:{client_key[1]} ↔ {forward_key[0]}→{forward_key[1]}")
+            break
+    return forward_key
+
+
+def clean_timeout_connections(client_forward_map, forward_client_map, login_states, timeout):
+    """清理超时连接（客户端连接和转发连接）"""
+    current_time = time.time()
+    expired_clients = []
+    for client_key, info in client_forward_map.items():
+        if current_time - info['last_active'] > timeout:
+            expired_clients.append(client_key)
+    for client_key in expired_clients:
+        forward_key = client_forward_map[client_key]['forward_key']
+        if forward_key in forward_client_map:
+            del forward_client_map[forward_key]
+            if forward_key in login_states:
+                del login_states[forward_key]
+        del client_forward_map[client_key]
+        print(f"⚠️  客户端连接超时移除：{client_key[0]}:{client_key[1]}")
+
+
+def output_log(log_msg, output_path):
+    """输出监控日志"""
+    if output_path == "stdout":
+        print(log_msg)
+    else:
+        try:
+            with open(output_path, "a", encoding="utf-8") as f:
+                f.write(log_msg + "\n")
+        except Exception as e:
+            print(f"❌ 写入监控日志失败：{str(e)}", file=sys.stderr)
+
+
+def main():
+    args = parse_args()
+    downstream_servers = validate_servers(args.downstreams)
+    downstream_set = set(downstream_servers)
+    os_type = get_os_type()
+    if not os_type:
+        print(f"❌ 不支持的操作系统：{sys.platform}", file=sys.stderr)
+        sys.exit(1)
+
+    # 初始化资源
+    sock = init_raw_socket(os_type)
+    # 连接映射：client_key=(client_ip, client_port) → 转发信息
+    client_forward_map = dict()
+    # 反向映射：forward_key=(stunnel_src:port→downstream_ip:port) → client_key
+    forward_client_map = dict()
+    # 登录状态：forward_key → is_logged_in（bool）
+    login_states = defaultdict(bool)
+
+    print(f"✅ 开始stunnel代理场景-FIX登录连接监控")
+    print(f"📋 配置信息：stunnel监听端口={args.stunnel_listen} | 下游服务器={downstream_servers} | "
+          f"stunnel日志={args.stunnel_log} | 统计间隔={args.interval}秒 | 超时={args.timeout}秒")
+    print(f"⚠️  提示：按Ctrl+C退出，确保stunnel配置debug≥3且与下游为明文通信")
+
+    # 启动子线程解析stunnel日志（实时更新连接映射）
+    import threading
+    log_thread = threading.Thread(
+        target=parse_stunnel_log,
+        args=(args.stunnel_log, client_forward_map, forward_client_map),
+        daemon=True  # 主线程退出时子线程自动退出
+    )
+    log_thread.start()
+
+    last_stat_time = time.time()
+    try:
+        while True:
+            current_time = time.time()
+            try:
+                # 接收TCP数据包（抓stunnel→下游的流量）
+                data, _ = sock.recvfrom(4096)
+                tcp_info = parse_tcp_packet(data)
+                if not tcp_info:
+                    continue
+
+                # 仅关注stunnel→下游的流量（目标是下游服务器）
+                if tcp_info['dst'] not in downstream_set:
+                    continue
+
+                # 关联转发连接与客户端连接
+                forward_key = associate_forward_connection(tcp_info, client_forward_map, forward_client_map)
+                if forward_key not in forward_client_map:
+                    continue  # 未关联到客户端的转发连接，跳过
+
+                # 更新连接活动时间
+                client_key = forward_client_map[forward_key]
+                if client_key in client_forward_map:
+                    client_forward_map[client_key]['last_active'] = current_time
+
+                # 解析FIX登录/登出消息
+                fix_msg_type = parse_fix_msg_type(tcp_info['data'])
+                if fix_msg_type == 'A':
+                    login_states[forward_key] = True
+                    print(f"✅ 登录成功：{client_key[0]}:{client_key[1]} → {forward_key[1]}")
+                elif fix_msg_type == '5':
+                    login_states[forward_key] = False
+                    print(f"❌ 登出：{client_key[0]}:{client_key[1]} → {forward_key[1]}")
+
+                # 定时统计输出
+                if current_time - last_stat_time >= args.interval:
+                    # 清理超时连接
+                    clean_timeout_connections(client_forward_map, forward_client_map, login_states, args.timeout)
+                    # 统计已登录的客户端连接数
+                    logged_in_count = 0
+                    logged_in_details = []
+                    for forward_key, is_logged in login_states.items():
+                        if is_logged and forward_key in forward_client_map:
+                            client_key = forward_client_map[forward_key]
+                            logged_in_count += 1
+                            logged_in_details.append(f"{client_key[0]}:{client_key[1]}")
+                    # 生成日志
+                    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                    log_msg = (
+                        f"[{timestamp}] 已登录FIX连接数：{logged_in_count} | "
+                        f"活跃客户端连接数：{len(client_forward_map)} | "
+                        f"已登录客户端：{', '.join(logged_in_details) if logged_in_details else '无'}"
+                    )
+                    output_log(log_msg, args.output_log)
+                    last_stat_time = current_time
+
+            except Exception as e:
+                # 忽略单个数据包解析错误
+                continue
+
+    except KeyboardInterrupt:
+        print("\n🛑 监控被用户中断，正在清理资源...")
+    finally:
+        # 关闭资源
+        if os_type == "windows":
+            sock.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
+        sock.close()
+        print("✅ 程序已退出")
+
+
+if __name__ == "__main__":
+    main()
