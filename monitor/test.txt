@@ -1,0 +1,284 @@
+import socket
+import struct
+import time
+import sys
+import argparse
+from collections import defaultdict
+
+# FIX协议常量
+FIX_SOH = b'\x01'  # FIX消息字段分隔符
+FIX_LOGON_MSG_TYPE = b'A'  # 登录消息类型
+FIX_LOGOUT_MSG_TYPE = b'5'  # 登出消息类型
+FIX_MSGTYPE_TAG = b'35='  # MsgType标签（35=A表示登录）
+
+# 默认配置
+DEFAULT_FIX_SERVERS = []
+DEFAULT_MONITOR_INTERVAL = 60  # 统计输出间隔（秒）
+DEFAULT_TIMEOUT = 300  # 连接超时时间（秒，无活动则移除）
+DEFAULT_LOG_OUTPUT = "stdout"
+
+
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description="FIX已登录连接监控工具（无第三方依赖）")
+    parser.add_argument(
+        "-s", "--servers",
+        type=str,
+        nargs="+",
+        required=True,
+        help="下游FIX服务器（必填），格式：IP:端口，多个用空格分隔，例：192.168.1.100:9876"
+    )
+    parser.add_argument(
+        "-i", "--interval",
+        type=int,
+        default=DEFAULT_MONITOR_INTERVAL,
+        help=f"统计输出间隔（秒），默认：{DEFAULT_MONITOR_INTERVAL}"
+    )
+    parser.add_argument(
+        "-t", "--timeout",
+        type=int,
+        default=DEFAULT_TIMEOUT,
+        help=f"连接超时时间（秒，无活动则移除），默认：{DEFAULT_TIMEOUT}"
+    )
+    parser.add_argument(
+        "-l", "--log",
+        type=str,
+        default=DEFAULT_LOG_OUTPUT,
+        help=f"日志输出方式，stdout（控制台）或文件路径，默认：{DEFAULT_LOG_OUTPUT}"
+    )
+    return parser.parse_args()
+
+
+def validate_servers(servers_str):
+    """验证并解析服务器列表（IP:端口）"""
+    valid_servers = []
+    for s in servers_str:
+        if ":" not in s:
+            print(f"❌ 无效服务器格式：{s}，正确格式：IP:端口", file=sys.stderr)
+            sys.exit(1)
+        ip, port_str = s.split(":", 1)
+        try:
+            port = int(port_str)
+            if not (1 <= port <= 65535):
+                raise ValueError
+            valid_servers.append((ip, port))
+        except ValueError:
+            print(f"❌ 无效端口：{port_str}，需为1-65535的整数", file=sys.stderr)
+            sys.exit(1)
+    return valid_servers
+
+
+def ip_to_bytes(ip):
+    """IP字符串转4字节（用于数据包解析）"""
+    return socket.inet_aton(ip)
+
+
+def bytes_to_ip(bytes_data):
+    """4字节转IP字符串"""
+    return socket.inet_ntoa(bytes_data)
+
+
+def parse_tcp_packet(data):
+    """解析TCP数据包，提取源IP、源端口、目标IP、目标端口、TCP数据"""
+    try:
+        # 解析IP头（20字节固定部分）
+        ip_header = data[:20]
+        iph = struct.unpack('!BBHHHBBH4s4s', ip_header)
+        protocol = iph[6]  # 协议类型（6=TCP）
+        if protocol != 6:
+            return None  # 非TCP数据包，跳过
+        
+        src_ip = bytes_to_ip(iph[8])
+        dst_ip = bytes_to_ip(iph[9])
+        ip_header_len = (iph[0] & 0x0F) * 4  # IP头长度（字节）
+        
+        # 解析TCP头（20字节固定部分）
+        tcp_header = data[ip_header_len:ip_header_len+20]
+        tcph = struct.unpack('!HHLLBBHHH', tcp_header)
+        src_port = tcph[0]
+        dst_port = tcph[1]
+        tcp_header_len = ((tcph[4] & 0xF0) >> 4) * 4  # TCP头长度（字节）
+        
+        # 提取TCP负载数据（FIX消息内容）
+        tcp_data = data[ip_header_len + tcp_header_len:]
+        if not tcp_data:
+            return None  # 无数据负载，跳过
+        
+        return {
+            'src_ip': src_ip,
+            'src_port': src_port,
+            'dst_ip': dst_ip,
+            'dst_port': dst_port,
+            'data': tcp_data
+        }
+    except Exception as e:
+        # 忽略解析失败的数据包（如分片、异常格式）
+        return None
+
+
+def parse_fix_msg_type(tcp_data):
+    """从TCP数据中提取FIX消息的MsgType（仅处理完整/部分FIX消息）"""
+    # FIX消息以SOH分隔，先按SOH拆分字段
+    fields = tcp_data.split(FIX_SOH)
+    for field in fields:
+        if field.startswith(FIX_MSGTYPE_TAG):
+            # 提取MsgType（如b'35=A' → b'A'）
+            msg_type = field[len(FIX_MSGTYPE_TAG):]
+            if msg_type in [FIX_LOGON_MSG_TYPE, FIX_LOGOUT_MSG_TYPE]:
+                return msg_type.decode('ascii', errors='ignore')
+    return None
+
+
+def init_raw_socket(os_type):
+    """初始化原始套接字（适配Linux/Windows）"""
+    try:
+        if os_type == "linux":
+            # Linux：PF_PACKET协议族，抓取所有网卡的TCP流量
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0800))
+        elif os_type == "windows":
+            # Windows：SOCK_RAW + IPPROTO_TCP，需要管理员权限
+            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+            # 启用混杂模式（抓取所有流量）
+            sock.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+        else:
+            raise NotImplementedError(f"❌ 不支持的操作系统：{os_type}")
+        return sock
+    except PermissionError:
+        print("❌ 权限不足！请以管理员（Windows）或root（Linux）身份运行程序", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ 初始化抓包 socket 失败：{str(e)}", file=sys.stderr)
+        sys.exit(1)
+
+
+def get_os_type():
+    """获取操作系统类型（linux/windows）"""
+    os_name = sys.platform.lower()
+    if os_name.startswith("linux"):
+        return "linux"
+    elif os_name.startswith("win"):
+        return "windows"
+    else:
+        raise NotImplementedError(f"❌ 不支持的操作系统：{os_name}")
+
+
+def is_target_server(ip, port, target_servers):
+    """判断是否为目标下游服务器（IP:端口匹配）"""
+    return (ip, port) in target_servers
+
+
+def clean_timeout_connections(connection_states, timeout):
+    """清理超时未活动的连接"""
+    current_time = time.time()
+    expired_keys = []
+    for conn_key, state in connection_states.items():
+        if current_time - state['last_active'] > timeout:
+            expired_keys.append(conn_key)
+    for key in expired_keys:
+        del connection_states[key]
+
+
+def output_log(log_msg, log_output):
+    """输出日志（控制台/文件）"""
+    if log_output == "stdout":
+        print(log_msg)
+    else:
+        try:
+            with open(log_output, "a", encoding="utf-8") as f:
+                f.write(log_msg + "\n")
+        except Exception as e:
+            print(f"❌ 写入日志文件失败：{str(e)}，日志内容：{log_msg}", file=sys.stderr)
+
+
+def monitor_logged_in_fix_connections(fix_servers, interval, timeout, log_output):
+    """主监控逻辑：捕获流量→解析FIX登录状态→统计输出"""
+    os_type = get_os_type()
+    target_servers = set(fix_servers)  # 转换为集合，加速匹配
+    sock = init_raw_socket(os_type)
+    
+    # 连接状态表：key=(src_ip:src_port, dst_ip:dst_port)，value={'is_logged_in': bool, 'last_active': float}
+    connection_states = defaultdict(lambda: {'is_logged_in': False, 'last_active': time.time()})
+    
+    print(f"✅ 开始FIX已登录连接监控 | 操作系统：{os_type} | 统计间隔：{interval}秒 | 超时时间：{timeout}秒 | 目标服务器：{fix_servers}")
+    print(f"⚠️  提示：程序正在抓取TCP流量，请勿中断...（按Ctrl+C退出）")
+    
+    last_output_time = time.time()
+    try:
+        while True:
+            current_time = time.time()
+            try:
+                # 接收数据包（缓冲区1024字节，足够容纳FIX消息片段）
+                data, _ = sock.recvfrom(1024)
+                if not data:
+                    continue
+                
+                # 解析TCP数据包
+                tcp_info = parse_tcp_packet(data)
+                if not tcp_info:
+                    continue
+                
+                src_key = (tcp_info['src_ip'], tcp_info['src_port'])
+                dst_key = (tcp_info['dst_ip'], tcp_info['dst_port'])
+                conn_key = (f"{src_key[0]}:{src_key[1]}", f"{dst_key[0]}:{dst_key[1]}")
+                
+                # 仅关注目标服务器的连接（下游服务器作为目标端，即客户端→下游服务器）
+                if not is_target_server(dst_key[0], dst_key[1], target_servers):
+                    continue
+                
+                # 更新连接最后活动时间
+                connection_states[conn_key]['last_active'] = current_time
+                
+                # 解析FIX消息类型（判断登录/登出）
+                fix_msg_type = parse_fix_msg_type(tcp_info['data'])
+                if fix_msg_type == FIX_LOGON_MSG_TYPE.decode():
+                    # 收到Logon消息，标记为已登录
+                    connection_states[conn_key]['is_logged_in'] = True
+                    print(f"ℹ️  连接登录成功：{conn_key[0]} → {conn_key[1]}")
+                elif fix_msg_type == FIX_LOGOUT_MSG_TYPE.decode():
+                    # 收到Logout消息，标记为未登录
+                    connection_states[conn_key]['is_logged_in'] = False
+                    print(f"ℹ️  连接登出：{conn_key[0]} → {conn_key[1]}")
+                
+                # 定时统计输出
+                if current_time - last_output_time >= interval:
+                    # 清理超时连接
+                    clean_timeout_connections(connection_states, timeout)
+                    # 统计已登录的连接数
+                    logged_in_count = 0
+                    logged_in_details = []
+                    for conn_key, state in connection_states.items():
+                        if state['is_logged_in']:
+                            logged_in_count += 1
+                            logged_in_details.append(f"{conn_key[0]}→{conn_key[1]}")
+                    # 生成日志
+                    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                    log_msg = f"[{timestamp}] 已登录FIX连接数：{logged_in_count} | 总活跃TCP连接数：{len(connection_states)}"
+                    if logged_in_details:
+                        log_msg += f" | 已登录连接：{', '.join(logged_in_details)}"
+                    output_log(log_msg, log_output)
+                    last_output_time = current_time
+            
+            except Exception as e:
+                # 忽略单个数据包的解析错误，不影响整体监控
+                continue
+        
+    except KeyboardInterrupt:
+        print("\n🛑 监控被用户中断，正在清理资源...")
+    finally:
+        # Windows关闭混杂模式
+        if os_type == "windows":
+            sock.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
+        sock.close()
+        print("✅ 程序已退出")
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    fix_servers = validate_servers(args.servers)
+    monitor_logged_in_fix_connections(
+        fix_servers=fix_servers,
+        interval=args.interval,
+        timeout=args.timeout,
+        log_output=args.log
+    )
