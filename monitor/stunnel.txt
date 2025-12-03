@@ -353,3 +353,351 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+import socket
+import struct
+import time
+import sys
+import argparse
+from collections import defaultdict
+import fileinput
+import re
+from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer  # Python2；Python3用http.server
+import threading
+
+# ========== 基础常量（不变） ==========
+FIX_SOH = b'\x01'
+FIX_LOGON_MSG_TYPE = b'A'
+FIX_LOGOUT_MSG_TYPE = b'5'
+FIX_MSGTYPE_TAG = b'35='
+STUNNEL_CONNECT_PATTERN = re.compile(
+    r'CONNECTED: \[(?P<client_ip>[0-9.]+):(?P<client_port>\d+)\] → \[(?P<downstream_ip>[0-9.]+):(?P<downstream_port>\d+)\]'
+)
+STUNNEL_CLOSE_PATTERN = re.compile(
+    r'CLOSED: \[(?P<client_ip>[0-9.]+):(?P<client_port>\d+)\] → \[(?P<downstream_ip>[0-9.]+):(?P<downstream_port>\d+)\]'
+)
+
+# ========== 全局指标存储（供Prometheus拉取） ==========
+# 结构：{指标名: {标签字典: 数值}}
+metrics = {
+    "fix_logged_in_connections": defaultdict(float),  # 已登录FIX连接数（Gauge）
+    "fix_active_client_connections": defaultdict(float),  # 活跃客户端连接数（Gauge）
+    "fix_forward_connections": defaultdict(float),  # 活跃转发连接数（Gauge）
+    "fix_connection_status": defaultdict(float),  # 单个客户端登录状态（1=登录，0=未登录）
+}
+
+# ========== 配置默认值 ==========
+DEFAULT_STUNNEL_LISTEN_PORT = 9876
+DEFAULT_DOWNSTREAM_SERVERS = []
+DEFAULT_STUNNEL_LOG = "/var/log/stunnel/stunnel.log"
+DEFAULT_MONITOR_INTERVAL = 10  # 指标更新间隔（秒，需≤Prometheus拉取间隔）
+DEFAULT_TIMEOUT = 300
+DEFAULT_EXPORTER_PORT = 9101  # Exporter暴露端口（统一多机端口）
+DEFAULT_INSTANCE_IP = None  # 自动获取本机IP
+
+
+def get_local_ip():
+    """自动获取本机对外IP（适配多机部署，无需手动配置）"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # 连接公网DNS，不发送数据
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except Exception:
+        return "127.0.0.1"  # 异常时默认本地IP
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="stunnel-FIX监控+Prometheus Exporter（多机适配）")
+    parser.add_argument("-d", "--downstreams", type=str, nargs="+", required=True, help="下游服务器IP:端口")
+    parser.add_argument("-l", "--stunnel-listen", type=int, default=DEFAULT_STUNNEL_LISTEN_PORT, help="stunnel监听端口")
+    parser.add_argument("-s", "--stunnel-log", type=str, default=DEFAULT_STUNNEL_LOG, help="stunnel日志路径")
+    parser.add_argument("-i", "--interval", type=int, default=DEFAULT_MONITOR_INTERVAL, help="指标更新间隔（秒）")
+    parser.add_argument("-t", "--timeout", type=int, default=DEFAULT_TIMEOUT, help="连接超时（秒）")
+    parser.add_argument("-p", "--exporter-port", type=int, default=DEFAULT_EXPORTER_PORT, help="Exporter暴露端口")
+    return parser.parse_args()
+
+
+def validate_servers(servers_str):
+    valid_servers = []
+    for s in servers_str:
+        if ":" not in s:
+            print(f"❌ 无效服务器：{s}", file=sys.stderr)
+            sys.exit(1)
+        ip, port_str = s.split(":", 1)
+        try:
+            port = int(port_str)
+            valid_servers.append((ip, port))
+        except ValueError:
+            print(f"❌ 无效端口：{port_str}", file=sys.stderr)
+            sys.exit(1)
+    return valid_servers
+
+
+def get_os_type():
+    os_name = sys.platform.lower()
+    return "linux" if os_name.startswith("linux") else "windows" if os_name.startswith("win") else None
+
+
+def init_raw_socket(os_type):
+    try:
+        if os_type == "linux":
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0800))
+        elif os_type == "windows":
+            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+            sock.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+        else:
+            raise NotImplementedError(f"不支持OS：{os_type}")
+        return sock
+    except PermissionError:
+        print("❌ 需root/管理员权限运行", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ 抓包socket初始化失败：{e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def parse_tcp_packet(data):
+    try:
+        ip_header = data[:20]
+        iph = struct.unpack('!BBHHHBBH4s4s', ip_header)
+        if iph[6] != 6:
+            return None
+        src_ip = socket.inet_ntoa(iph[8])
+        dst_ip = socket.inet_ntoa(iph[9])
+        ip_header_len = (iph[0] & 0x0F) * 4
+        tcp_header = data[ip_header_len:ip_header_len+20]
+        tcph = struct.unpack('!HHLLBBHHH', tcp_header)
+        src_port = tcph[0]
+        dst_port = tcph[1]
+        tcp_header_len = ((tcph[4] & 0xF0) >> 4) * 4
+        tcp_data = data[ip_header_len + tcp_header_len:]
+        return {'src': (src_ip, src_port), 'dst': (dst_ip, dst_port), 'data': tcp_data} if tcp_data else None
+    except Exception:
+        return None
+
+
+def parse_fix_msg_type(tcp_data):
+    fields = tcp_data.split(FIX_SOH)
+    for field in fields:
+        if field.startswith(FIX_MSGTYPE_TAG):
+            msg_type = field[len(FIX_MSGTYPE_TAG):].decode('ascii', errors='ignore')
+            return msg_type if msg_type in ['A', '5'] else None
+    return None
+
+
+def parse_stunnel_log(log_path, client_forward_map, forward_client_map):
+    try:
+        for line in fileinput.input(log_path, follow=True):
+            line = line.strip()
+            connect_match = STUNNEL_CONNECT_PATTERN.search(line)
+            if connect_match:
+                client_key = (connect_match.group('client_ip'), int(connect_match.group('client_port')))
+                downstream = (connect_match.group('downstream_ip'), int(connect_match.group('downstream_port')))
+                client_forward_map[client_key] = {
+                    'downstream': downstream, 'forward_key': None, 'last_active': time.time()
+                }
+            close_match = STUNNEL_CLOSE_PATTERN.search(line)
+            if close_match:
+                client_key = (close_match.group('client_ip'), int(close_match.group('client_port')))
+                if client_key in client_forward_map:
+                    forward_key = client_forward_map[client_key]['forward_key']
+                    if forward_key in forward_client_map:
+                        del forward_client_map[forward_key]
+                    del client_forward_map[client_key]
+    except Exception as e:
+        print(f"⚠️  日志解析异常：{e}", file=sys.stderr)
+
+
+def associate_forward_connection(tcp_info, client_forward_map, forward_client_map):
+    forward_src = tcp_info['src']
+    forward_dst = tcp_info['dst']
+    forward_key = (f"{forward_src[0]}:{forward_src[1]}", f"{forward_dst[0]}:{forward_dst[1]}")
+    for client_key, info in client_forward_map.items():
+        if info['downstream'] == forward_dst and info['forward_key'] is None:
+            info['forward_key'] = forward_key
+            info['last_active'] = time.time()
+            forward_client_map[forward_key] = client_key
+            break
+    return forward_key
+
+
+def clean_timeout_connections(client_forward_map, forward_client_map, login_states, timeout):
+    current_time = time.time()
+    expired_clients = []
+    for client_key, info in client_forward_map.items():
+        if current_time - info['last_active'] > timeout:
+            expired_clients.append(client_key)
+    for client_key in expired_clients:
+        forward_key = client_forward_map[client_key]['forward_key']
+        if forward_key in forward_client_map:
+            del forward_client_map[forward_key]
+            if forward_key in login_states:
+                del login_states[forward_key]
+        del client_forward_map[client_key]
+
+
+def update_metrics(client_forward_map, forward_client_map, login_states, instance_ip, stunnel_listen):
+    """更新Prometheus指标（核心：打上节点标签）"""
+    # 基础标签（所有指标共享）
+    base_labels = {
+        "instance": instance_ip,
+        "stunnel_listen": str(stunnel_listen)
+    }
+    # 1. 活跃客户端连接数
+    metrics["fix_active_client_connections"][tuple(sorted(base_labels.items()))] = len(client_forward_map)
+    # 2. 活跃转发连接数
+    metrics["fix_forward_connections"][tuple(sorted(base_labels.items()))] = len(forward_client_map)
+    # 3. 已登录连接数（汇总）
+    logged_in_count = sum(1 for k, v in login_states.items() if v and k in forward_client_map)
+    metrics["fix_logged_in_connections"][tuple(sorted(base_labels.items()))] = logged_in_count
+    # 4. 单个客户端登录状态（明细指标）
+    # 先清空旧明细，避免过期数据
+    for key in list(metrics["fix_connection_status"].keys()):
+        if key[0][1] == instance_ip:  # 只清空当前节点的明细
+            del metrics["fix_connection_status"][key]
+    # 新增当前明细
+    for forward_key, is_logged in login_states.items():
+        if forward_key in forward_client_map:
+            client_key = forward_client_map[forward_key]
+            downstream = client_forward_map[client_key]['downstream']
+            detail_labels = {
+                "instance": instance_ip,
+                "client_ip": client_key[0],
+                "client_port": str(client_key[1]),
+                "downstream": f"{downstream[0]}:{downstream[1]}"
+            }
+            metrics["fix_connection_status"][tuple(sorted(detail_labels.items()))] = 1 if is_logged else 0
+
+
+# ========== Prometheus Exporter HTTP服务 ==========
+class MetricsHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/metrics":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.end_headers()
+            # 生成Prometheus格式响应
+            response = []
+            for metric_name, label_values in metrics.items():
+                # 添加指标注释
+                response.append(f"# HELP {metric_name} FIX connection monitor metric")
+                response.append(f"# TYPE {metric_name} gauge")
+                # 添加每个标签组合的指标值
+                for labels_tuple, value in label_values.items():
+                    labels_str = ",".join([f"{k}=\"{v}\"" for k, v in labels_tuple])
+                    response.append(f"{metric_name}{{{labels_str}}} {value:.0f}")
+                response.append("")  # 空行分隔指标
+            self.wfile.write("\n".join(response).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+def start_exporter(port):
+    """启动Exporter HTTP服务（独立线程）"""
+    server = HTTPServer(("0.0.0.0", port), MetricsHandler)
+    print(f"📡 Prometheus Exporter启动：http://0.0.0.0:{port}/metrics")
+    server.serve_forever()
+
+
+# ========== 主监控逻辑 ==========
+def main():
+    args = parse_args()
+    downstream_servers = validate_servers(args.downstreams)
+    downstream_set = set(downstream_servers)
+    os_type = get_os_type()
+    instance_ip = get_local_ip()  # 自动获取节点IP（多机标签）
+    print(f"✅ 节点IP：{instance_ip} | stunnel监听：{args.stunnel_listen} | 下游：{downstream_servers}")
+
+    # 初始化资源
+    sock = init_raw_socket(os_type)
+    client_forward_map = dict()
+    forward_client_map = dict()
+    login_states = defaultdict(bool)
+
+    # 启动Exporter线程（独立运行，不阻塞监控逻辑）
+    exporter_thread = threading.Thread(target=start_exporter, args=(args.exporter_port,), daemon=True)
+    exporter_thread.start()
+
+    # 启动stunnel日志解析线程
+    log_thread = threading.Thread(
+        target=parse_stunnel_log, args=(args.stunnel_log, client_forward_map, forward_client_map), daemon=True
+    )
+    log_thread.start()
+
+    last_metric_update = time.time()
+    try:
+        while True:
+            current_time = time.time()
+            try:
+                # 抓包解析
+                data, _ = sock.recvfrom(4096)
+                tcp_info = parse_tcp_packet(data)
+                if not tcp_info or tcp_info['dst'] not in downstream_set:
+                    continue
+                forward_key = associate_forward_connection(tcp_info, client_forward_map, forward_client_map)
+                if forward_key not in forward_client_map:
+                    continue
+                # 更新连接活动时间
+                client_key = forward_client_map[forward_key]
+                if client_key in client_forward_map:
+                    client_forward_map[client_key]['last_active'] = current_time
+                # 解析FIX登录/登出
+                fix_msg_type = parse_fix_msg_type(tcp_info['data'])
+                if fix_msg_type == 'A':
+                    login_states[forward_key] = True
+                elif fix_msg_type == '5':
+                    login_states[forward_key] = False
+            except Exception:
+                continue
+
+            # 定时更新指标（与Exporter配合）
+            if current_time - last_metric_update >= args.interval:
+                clean_timeout_connections(client_forward_map, forward_client_map, login_states, args.timeout)
+                update_metrics(client_forward_map, forward_client_map, login_states, instance_ip, args.stunnel_listen)
+                last_metric_update = current_time
+    except KeyboardInterrupt:
+        print("\n🛑 监控中断，清理资源...")
+    finally:
+        if os_type == "windows":
+            sock.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
+        sock.close()
+        print("✅ 程序退出")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+global:
+  scrape_interval: 15s  # 拉取间隔（≤脚本指标更新间隔，建议15s）
+
+scrape_configs:
+  - job_name: "edmz_fix_monitor"  # 任务名（Grafana中筛选用）
+    static_configs:
+      # 列出所有EDMZ节点的IP:Exporter端口（默认9101）
+      - targets: ["10.0.0.10:9101", "10.0.0.11:9101", "10.0.0.12:9101"]  # 替换为实际节点IP
+
+
+
+# Linux systemd示例（/etc/systemd/system/fix-monitor.service）
+[Unit]
+Description=FIX Login Monitor with Prometheus Exporter
+After=network.target stunnel.service
+
+[Service]
+User=root
+WorkingDirectory=/opt/fix-monitor
+ExecStart=/usr/bin/python /opt/fix-monitor/stunnel_fix_exporter.py -d 192.168.1.100:9876 -s /var/log/stunnel/stunnel.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
