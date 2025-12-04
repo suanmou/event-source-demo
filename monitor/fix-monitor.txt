@@ -1,0 +1,744 @@
+#!/usr/bin/env python3
+"""
+FIX连接监控程序
+用于监控连接到下游服务器的FIX连接数量及时长
+"""
+
+import subprocess
+import re
+import time
+import json
+from datetime import datetime, timedelta
+from collections import defaultdict
+import socket
+import os
+import sys
+from typing import Dict, List, Tuple
+
+class FIXConnectionMonitor:
+    def __init__(self, downstream_ip: str, downstream_port: int = None, 
+                 fix_port_range: Tuple[int, int] = None):
+        """
+        初始化监控器
+        
+        Args:
+            downstream_ip: 下游服务器IP
+            downstream_port: 下游服务器端口（如果为None则监控所有端口）
+            fix_port_range: FIX端口范围（如(5000, 6000)）
+        """
+        self.downstream_ip = downstream_ip
+        self.downstream_port = downstream_port
+        self.fix_port_range = fix_port_range
+        
+        # 存储连接信息
+        self.active_connections = {}  # conn_id -> start_time
+        self.connection_history = []  # 历史连接记录
+        self.stats = {
+            'total_connections': 0,
+            'current_connections': 0,
+            'peak_connections': 0
+        }
+        
+        print(f"监控FIX连接到下游服务器: {downstream_ip}")
+        if downstream_port:
+            print(f"目标端口: {downstream_port}")
+        if fix_port_range:
+            print(f"FIX端口范围: {fix_port_range[0]}-{fix_port_range[1]}")
+
+    def _get_netstat_output(self) -> str:
+        """获取网络连接信息"""
+        try:
+            # Linux/Mac使用netstat
+            cmd = ['netstat', '-tna'] if sys.platform != 'win32' else ['netstat', '-ano']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            return result.stdout
+        except subprocess.TimeoutExpired:
+            return ""
+        except FileNotFoundError:
+            # 尝试使用ss命令（Linux）
+            try:
+                result = subprocess.run(['ss', '-tna'], capture_output=True, text=True, timeout=5)
+                return result.stdout
+            except:
+                return ""
+
+    def _parse_connections(self, output: str) -> List[Dict]:
+        """解析连接信息"""
+        connections = []
+        lines = output.split('\n')
+        
+        for line in lines:
+            if 'ESTABLISHED' not in line and 'TIME_WAIT' not in line:
+                continue
+                
+            # 解析连接信息
+            parts = re.split(r'\s+', line.strip())
+            if len(parts) < 4:
+                continue
+            
+            try:
+                # 提取本地和远程地址
+                local_addr = parts[3] if sys.platform != 'win32' else parts[1]
+                remote_addr = parts[4] if sys.platform != 'win32' else parts[2]
+                
+                # 解析地址和端口
+                if ':' in remote_addr:
+                    remote_ip, remote_port = remote_addr.rsplit(':', 1)
+                    local_ip, local_port = local_addr.rsplit(':', 1)
+                    
+                    # 转换为整数
+                    try:
+                        remote_port = int(remote_port)
+                        local_port = int(local_port)
+                    except ValueError:
+                        continue
+                    
+                    # 检查是否匹配下游服务器
+                    if remote_ip == self.downstream_ip:
+                        if self.downstream_port and remote_port != self.downstream_port:
+                            continue
+                        
+                        # 检查是否在FIX端口范围内
+                        if self.fix_port_range:
+                            if not (self.fix_port_range[0] <= local_port <= self.fix_port_range[1]):
+                                continue
+                        
+                        connection = {
+                            'local_addr': local_addr,
+                            'remote_addr': remote_addr,
+                            'local_port': local_port,
+                            'remote_port': remote_port,
+                            'state': parts[0] if sys.platform != 'win32' else 'ESTABLISHED',
+                            'timestamp': datetime.now()
+                        }
+                        connections.append(connection)
+                        
+            except (IndexError, ValueError):
+                continue
+        
+        return connections
+
+    def _get_connection_id(self, conn: Dict) -> str:
+        """生成连接唯一标识"""
+        return f"{conn['local_addr']}->{conn['remote_addr']}"
+
+    def update_connections(self):
+        """更新连接状态"""
+        # 获取当前连接
+        output = self._get_netstat_output()
+        current_conns = self._parse_connections(output)
+        
+        current_ids = set()
+        
+        # 处理当前连接
+        for conn in current_conns:
+            conn_id = self._get_connection_id(conn)
+            current_ids.add(conn_id)
+            
+            # 如果是新连接，记录开始时间
+            if conn_id not in self.active_connections:
+                self.active_connections[conn_id] = {
+                    'start_time': datetime.now(),
+                    'local_addr': conn['local_addr'],
+                    'remote_addr': conn['remote_addr'],
+                    'local_port': conn['local_port'],
+                    'remote_port': conn['remote_port']
+                }
+                self.stats['total_connections'] += 1
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 新连接: {conn_id}")
+        
+        # 检查断开的连接
+        disconnected = []
+        for conn_id in list(self.active_connections.keys()):
+            if conn_id not in current_ids:
+                # 连接断开
+                conn_info = self.active_connections.pop(conn_id)
+                duration = datetime.now() - conn_info['start_time']
+                
+                history_record = {
+                    'connection_id': conn_id,
+                    'start_time': conn_info['start_time'],
+                    'end_time': datetime.now(),
+                    'duration_seconds': duration.total_seconds(),
+                    'local_addr': conn_info['local_addr'],
+                    'remote_addr': conn_info['remote_addr']
+                }
+                self.connection_history.append(history_record)
+                disconnected.append(history_record)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 连接断开: {conn_id}, 持续时间: {duration}")
+        
+        # 更新统计
+        self.stats['current_connections'] = len(self.active_connections)
+        self.stats['peak_connections'] = max(
+            self.stats['peak_connections'], 
+            self.stats['current_connections']
+        )
+        
+        return current_conns, disconnected
+
+    def print_stats(self):
+        """打印统计信息"""
+        print("\n" + "="*60)
+        print(f"FIX连接监控统计 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("="*60)
+        print(f"当前活动连接数: {self.stats['current_connections']}")
+        print(f"总连接数: {self.stats['total_connections']}")
+        print(f"峰值连接数: {self.stats['peak_connections']}")
+        
+        if self.active_connections:
+            print("\n当前活动连接:")
+            for conn_id, conn_info in self.active_connections.items():
+                duration = datetime.now() - conn_info['start_time']
+                hours, remainder = divmod(int(duration.total_seconds()), 3600)
+                minutes, seconds = divmod(remainder, 60)
+                print(f"  {conn_id}")
+                print(f"    已连接: {hours:02d}:{minutes:02d}:{seconds:02d}")
+                print(f"    开始时间: {conn_info['start_time'].strftime('%H:%M:%S')}")
+        
+        # 显示最近断开的连接
+        if self.connection_history[-5:]:
+            print("\n最近断开的连接:")
+            for record in self.connection_history[-5:]:
+                duration = timedelta(seconds=record['duration_seconds'])
+                print(f"  {record['connection_id']} - 持续时间: {duration}")
+        
+        print("="*60)
+
+    def save_report(self, filename: str = None):
+        """保存报告到文件"""
+        if filename is None:
+            filename = f"fix_connections_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        report = {
+            'timestamp': datetime.now().isoformat(),
+            'downstream_server': self.downstream_ip,
+            'stats': self.stats,
+            'active_connections': [
+                {
+                    'connection_id': conn_id,
+                    'start_time': info['start_time'].isoformat(),
+                    'duration_seconds': (datetime.now() - info['start_time']).total_seconds(),
+                    **{k: v for k, v in info.items() if k != 'start_time'}
+                }
+                for conn_id, info in self.active_connections.items()
+            ],
+            'recent_disconnected': [
+                {
+                    **record,
+                    'start_time': record['start_time'].isoformat(),
+                    'end_time': record['end_time'].isoformat()
+                }
+                for record in self.connection_history[-10:]
+            ]
+        }
+        
+        with open(filename, 'w') as f:
+            json.dump(report, f, indent=2, default=str)
+        
+        print(f"报告已保存到: {filename}")
+
+def main():
+    """主函数"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='监控FIX连接到下游服务器')
+    parser.add_argument('--ip', required=True, help='下游服务器IP地址')
+    parser.add_argument('--port', type=int, help='下游服务器端口')
+    parser.add_argument('--min-port', type=int, default=5000, help='FIX最小端口号')
+    parser.add_argument('--max-port', type=int, default=6000, help='FIX最大端口号')
+    parser.add_argument('--interval', type=int, default=5, help='监控间隔（秒）')
+    parser.add_argument('--log-file', help='日志文件路径')
+    
+    args = parser.parse_args()
+    
+    # 创建监控器
+    monitor = FIXConnectionMonitor(
+        downstream_ip=args.ip,
+        downstream_port=args.port,
+        fix_port_range=(args.min_port, args.max_port)
+    )
+    
+    print(f"开始监控，间隔: {args.interval}秒")
+    print("按 Ctrl+C 停止监控\n")
+    
+    try:
+        while True:
+            # 更新连接状态
+            monitor.update_connections()
+            
+            # 打印统计信息
+            monitor.print_stats()
+            
+            # 等待
+            time.sleep(args.interval)
+            
+    except KeyboardInterrupt:
+        print("\n监控停止")
+        
+        # 保存最终报告
+        monitor.save_report()
+        
+        print(f"总连接数: {monitor.stats['total_connections']}")
+        print(f"峰值连接: {monitor.stats['peak_connections']}")
+
+if __name__ == "__main__":
+    main()
+
+
+
+#!/usr/bin/env python3
+"""
+FIX连接监控Exporter for Prometheus
+支持多机部署，提供/metrics接口
+"""
+
+import subprocess
+import re
+import time
+import threading
+from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse
+import json
+import os
+from typing import Dict, List, Tuple
+import socket
+import sys
+
+class FIXMetricsCollector:
+    def __init__(self, target_ip: str = None, target_port: int = None, 
+                 fix_port_range: Tuple[int, int] = (5000, 6000),
+                 scrape_interval: int = 10):
+        """
+        FIX指标收集器
+        
+        Args:
+            target_ip: 下游服务器IP
+            target_port: 下游服务器端口
+            fix_port_range: FIX端口范围
+            scrape_interval: 收集间隔（秒）
+        """
+        self.target_ip = target_ip or self._get_downstream_ip()
+        self.target_port = target_port
+        self.fix_port_range = fix_port_range
+        self.scrape_interval = scrape_interval
+        
+        # 指标存储
+        self.metrics = {
+            'fix_connections_total': 0,           # 总连接数
+            'fix_connections_active': 0,          # 活动连接数
+            'fix_connections_peak': 0,            # 峰值连接数
+            'fix_connection_duration_seconds': {},  # 连接时长
+            'fix_connections_by_port': {},        # 按端口统计
+        }
+        
+        # 连接跟踪
+        self.active_connections = {}
+        self.connection_start_times = {}
+        
+        # 锁用于线程安全
+        self.lock = threading.Lock()
+        
+        # 主机标签
+        self.hostname = socket.gethostname()
+        self.instance_ip = self._get_local_ip()
+        
+        print(f"FIX Metrics Collector 启动")
+        print(f"目标服务器: {self.target_ip}:{self.target_port or '所有端口'}")
+        print(f"FIX端口范围: {fix_port_range[0]}-{fix_port_range[1]}")
+        print(f"主机名: {self.hostname}")
+        print(f"实例IP: {self.instance_ip}")
+    
+    def _get_local_ip(self) -> str:
+        """获取本地IP"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return '127.0.0.1'
+    
+    def _get_downstream_ip(self) -> str:
+        """获取下游服务器IP（从环境变量或配置文件）"""
+        # 从环境变量获取
+        ip = os.getenv('DOWNSTREAM_IP')
+        if ip:
+            return ip
+        
+        # 从配置文件获取
+        config_file = '/etc/fix-monitor/config.json'
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                    return config.get('downstream_ip', '127.0.0.1')
+            except:
+                pass
+        
+        return '127.0.0.1'
+    
+    def _get_connections_ss(self) -> List[Dict]:
+        """使用ss命令获取连接信息（Linux）"""
+        connections = []
+        try:
+            # 使用ss命令获取TCP连接
+            cmd = ['ss', '-tna', 'state', 'established']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            
+            for line in result.stdout.split('\n'):
+                if not line.strip():
+                    continue
+                
+                # 解析ss输出格式
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                
+                # 提取本地和远程地址
+                local = parts[3]
+                remote = parts[4]
+                
+                # 解析地址和端口
+                if ':' in remote:
+                    remote_ip = remote.split(':')[0]
+                    remote_port = int(remote.split(':')[1])
+                    
+                    if ':' in local:
+                        local_ip = local.split(':')[0]
+                        local_port = int(local.split(':')[1])
+                        
+                        # 检查是否匹配目标服务器
+                        if remote_ip == self.target_ip:
+                            if self.target_port and remote_port != self.target_port:
+                                continue
+                            
+                            # 检查是否在FIX端口范围内
+                            if not (self.fix_port_range[0] <= local_port <= self.fix_port_range[1]):
+                                continue
+                            
+                            conn_id = f"{local_ip}:{local_port}-{remote_ip}:{remote_port}"
+                            connections.append({
+                                'id': conn_id,
+                                'local_addr': f"{local_ip}:{local_port}",
+                                'remote_addr': f"{remote_ip}:{remote_port}",
+                                'local_port': local_port,
+                                'remote_port': remote_port,
+                                'timestamp': time.time()
+                            })
+        except Exception as e:
+            print(f"获取连接信息失败: {e}")
+        
+        return connections
+    
+    def _get_connections_netstat(self) -> List[Dict]:
+        """使用netstat命令获取连接信息（跨平台）"""
+        connections = []
+        try:
+            cmd = ['netstat', '-tna']
+            if sys.platform == 'win32':
+                cmd = ['netstat', '-ano']
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            
+            for line in result.stdout.split('\n'):
+                if 'ESTABLISHED' not in line:
+                    continue
+                
+                parts = re.split(r'\s+', line.strip())
+                if len(parts) < 4:
+                    continue
+                
+                # 提取地址（根据平台调整索引）
+                if sys.platform == 'win32':
+                    local_addr = parts[1]
+                    remote_addr = parts[2]
+                else:
+                    local_addr = parts[3]
+                    remote_addr = parts[4]
+                
+                # 解析地址
+                if ':' in remote_addr and ':' in local_addr:
+                    remote_ip, remote_port = remote_addr.rsplit(':', 1)
+                    local_ip, local_port = local_addr.rsplit(':', 1)
+                    
+                    try:
+                        remote_port = int(remote_port)
+                        local_port = int(local_port)
+                    except ValueError:
+                        continue
+                    
+                    # 检查是否匹配目标服务器
+                    if remote_ip == self.target_ip:
+                        if self.target_port and remote_port != self.target_port:
+                            continue
+                        
+                        # 检查是否在FIX端口范围内
+                        if not (self.fix_port_range[0] <= local_port <= self.fix_port_range[1]):
+                            continue
+                        
+                        conn_id = f"{local_ip}:{local_port}-{remote_ip}:{remote_port}"
+                        connections.append({
+                            'id': conn_id,
+                            'local_addr': local_addr,
+                            'remote_addr': remote_addr,
+                            'local_port': local_port,
+                            'remote_port': remote_port,
+                            'timestamp': time.time()
+                        })
+        except Exception as e:
+            print(f"获取连接信息失败: {e}")
+        
+        return connections
+    
+    def collect_metrics(self):
+        """收集指标"""
+        with self.lock:
+            try:
+                # 获取当前连接
+                if sys.platform == 'linux':
+                    connections = self._get_connections_ss()
+                else:
+                    connections = self._get_connections_netstat()
+                
+                current_ids = {conn['id'] for conn in connections}
+                previous_ids = set(self.active_connections.keys())
+                
+                # 更新活动连接
+                self.active_connections = {
+                    conn['id']: conn for conn in connections
+                }
+                
+                # 更新连接开始时间
+                for conn_id in current_ids:
+                    if conn_id not in self.connection_start_times:
+                        self.connection_start_times[conn_id] = time.time()
+                
+                # 清理断开连接的记录
+                disconnected = previous_ids - current_ids
+                for conn_id in disconnected:
+                    if conn_id in self.connection_start_times:
+                        del self.connection_start_times[conn_id]
+                
+                # 计算指标
+                active_connections = len(self.active_connections)
+                
+                # 更新总连接数（累计）
+                self.metrics['fix_connections_total'] += len(disconnected)
+                
+                # 更新峰值连接数
+                if active_connections > self.metrics['fix_connections_peak']:
+                    self.metrics['fix_connections_peak'] = active_connections
+                
+                # 更新活动连接数
+                self.metrics['fix_connections_active'] = active_connections
+                
+                # 计算连接时长
+                self.metrics['fix_connection_duration_seconds'] = {}
+                for conn_id, start_time in self.connection_start_times.items():
+                    duration = time.time() - start_time
+                    self.metrics['fix_connection_duration_seconds'][conn_id] = duration
+                
+                # 按端口统计
+                self.metrics['fix_connections_by_port'] = {}
+                for conn in connections:
+                    port = conn['local_port']
+                    self.metrics['fix_connections_by_port'][port] = \
+                        self.metrics['fix_connections_by_port'].get(port, 0) + 1
+                
+                return True
+            except Exception as e:
+                print(f"收集指标时出错: {e}")
+                return False
+    
+    def get_prometheus_metrics(self) -> str:
+        """生成Prometheus格式的指标"""
+        with self.lock:
+            metrics_lines = []
+            
+            # 添加HELP和TYPE注释
+            metrics_lines.append('# HELP fix_connections_total Total number of FIX connections since startup')
+            metrics_lines.append('# TYPE fix_connections_total counter')
+            metrics_lines.append(f'fix_connections_total{{host="{self.hostname}",ip="{self.instance_ip}",target="{self.target_ip}"}} {self.metrics["fix_connections_total"]}')
+            
+            metrics_lines.append('# HELP fix_connections_active Current number of active FIX connections')
+            metrics_lines.append('# TYPE fix_connections_active gauge')
+            metrics_lines.append(f'fix_connections_active{{host="{self.hostname}",ip="{self.instance_ip}",target="{self.target_ip}"}} {self.metrics["fix_connections_active"]}')
+            
+            metrics_lines.append('# HELP fix_connections_peak Peak number of FIX connections')
+            metrics_lines.append('# TYPE fix_connections_peak gauge')
+            metrics_lines.append(f'fix_connections_peak{{host="{self.hostname}",ip="{self.instance_ip}",target="{self.target_ip}"}} {self.metrics["fix_connections_peak"]}')
+            
+            # 连接时长指标
+            metrics_lines.append('# HELP fix_connection_duration_seconds Duration of active FIX connections in seconds')
+            metrics_lines.append('# TYPE fix_connection_duration_seconds gauge')
+            for conn_id, duration in self.metrics['fix_connection_duration_seconds'].items():
+                # 从conn_id提取信息
+                try:
+                    local_addr, remote_addr = conn_id.split('-', 1)
+                    metrics_lines.append(f'fix_connection_duration_seconds{{host="{self.hostname}",local_addr="{local_addr}",remote_addr="{remote_addr}",target="{self.target_ip}"}} {duration}')
+                except:
+                    continue
+            
+            # 按端口统计的指标
+            metrics_lines.append('# HELP fix_connections_by_port FIX connections count by local port')
+            metrics_lines.append('# TYPE fix_connections_by_port gauge')
+            for port, count in self.metrics['fix_connections_by_port'].items():
+                metrics_lines.append(f'fix_connections_by_port{{host="{self.hostname}",port="{port}",target="{self.target_ip}"}} {count}')
+            
+            return '\n'.join(metrics_lines)
+
+class MetricsHTTPHandler(BaseHTTPRequestHandler):
+    """HTTP处理器，提供/metrics端点"""
+    
+    def __init__(self, collector, *args, **kwargs):
+        self.collector = collector
+        super().__init__(*args, **kwargs)
+    
+    def do_GET(self):
+        """处理GET请求"""
+        parsed_path = urlparse(self.path)
+        
+        if parsed_path.path == '/':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            
+            html = f'''
+            <html>
+                <head><title>FIX Connections Exporter</title></head>
+                <body>
+                    <h1>FIX Connections Exporter</h1>
+                    <p>Host: {self.collector.hostname}</p>
+                    <p>Target: {self.collector.target_ip}</p>
+                    <p>Active Connections: {self.collector.metrics['fix_connections_active']}</p>
+                    <p><a href="/metrics">Metrics</a></p>
+                    <p><a href="/health">Health Check</a></p>
+                    <p><a href="/connections">Current Connections</a></p>
+                </body>
+            </html>
+            '''
+            self.wfile.write(html.encode('utf-8'))
+        
+        elif parsed_path.path == '/metrics':
+            # 在提供指标前先收集一次
+            self.collector.collect_metrics()
+            
+            metrics = self.collector.get_prometheus_metrics()
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; version=0.0.4')
+            self.send_header('Content-Length', str(len(metrics)))
+            self.end_headers()
+            
+            self.wfile.write(metrics.encode('utf-8'))
+        
+        elif parsed_path.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            health_status = {
+                'status': 'healthy',
+                'timestamp': datetime.now().isoformat(),
+                'hostname': self.collector.hostname,
+                'target': self.collector.target_ip,
+                'active_connections': self.collector.metrics['fix_connections_active']
+            }
+            
+            self.wfile.write(json.dumps(health_status).encode('utf-8'))
+        
+        elif parsed_path.path == '/connections':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            connections = []
+            for conn_id, conn_info in self.collector.active_connections.items():
+                start_time = self.collector.connection_start_times.get(conn_id, 0)
+                duration = time.time() - start_time if start_time > 0 else 0
+                
+                connections.append({
+                    'id': conn_id,
+                    'local_addr': conn_info['local_addr'],
+                    'remote_addr': conn_info['remote_addr'],
+                    'duration_seconds': duration,
+                    'local_port': conn_info['local_port'],
+                    'remote_port': conn_info['remote_port']
+                })
+            
+            response = {
+                'hostname': self.collector.hostname,
+                'target': self.collector.target_ip,
+                'total': len(connections),
+                'connections': connections
+            }
+            
+            self.wfile.write(json.dumps(response, indent=2).encode('utf-8'))
+        
+        else:
+            self.send_response(404)
+            self.send_header('Content-Type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'Not Found')
+    
+    def log_message(self, format, *args):
+        """简化日志输出"""
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {format % args}")
+
+def start_exporter(port: int = 9100, target_ip: str = None, 
+                   target_port: int = None, scrape_interval: int = 10):
+    """启动Exporter服务"""
+    
+    # 创建指标收集器
+    collector = FIXMetricsCollector(
+        target_ip=target_ip,
+        target_port=target_port,
+        scrape_interval=scrape_interval
+    )
+    
+    # 第一次收集指标
+    collector.collect_metrics()
+    
+    # 创建HTTP服务器
+    def handler(*args):
+        MetricsHTTPHandler(collector, *args)
+    
+    server = HTTPServer(('0.0.0.0', port), handler)
+    
+    print(f"Exporter启动，监听端口: {port}")
+    print(f"Metrics端点: http://localhost:{port}/metrics")
+    
+    # 启动后台指标收集线程
+    def collect_worker():
+        while True:
+            time.sleep(collector.scrape_interval)
+            collector.collect_metrics()
+    
+    collect_thread = threading.Thread(target=collect_worker, daemon=True)
+    collect_thread.start()
+    
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nExporter停止")
+        server.shutdown()
+
+if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='FIX连接监控Exporter')
+    parser.add_argument('--port', type=int, default=9100, help='HTTP服务端口')
+    parser.add_argument('--target-ip', type=str, help='下游服务器IP')
+    parser.add_argument('--target-port', type=int, help='下游服务器端口')
+    parser.add_argument('--interval', type=int, default=10, help='指标收集间隔（秒）')
+    
+    args = parser.parse_args()
+    
+    start_exporter(
+        port=args.port,
+        target_ip=args.target_ip,
+        target_port=args.target_port,
+        scrape_interval=args.interval
+    )
