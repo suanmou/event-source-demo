@@ -742,3 +742,122 @@ if __name__ == '__main__':
         target_port=args.target_port,
         scrape_interval=args.interval
     )
+
+
+
+{
+  "dashboard": {
+    "title": "FIX连接监控仪表板",
+    "tags": ["fix", "connections", "监控"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "活动连接总数",
+        "type": "stat",
+        "targets": [{
+          "expr": "sum(fix_connections_active)",
+          "legendFormat": "总连接数"
+        }],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 50},
+                {"color": "red", "value": 100}
+              ]
+            },
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "title": "各服务器连接数",
+        "type": "bargauge",
+        "targets": [{
+          "expr": "fix_connections_active",
+          "legendFormat": "{{host}}"
+        }],
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "gradient"
+        }
+      },
+      {
+        "title": "连接数趋势",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "fix_connections_active",
+            "legendFormat": "活动连接"
+          },
+          {
+            "expr": "increase(fix_connections_total[1h])",
+            "legendFormat": "新连接/小时"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "title": "连接时长分布",
+        "type": "heatmap",
+        "targets": [{
+          "expr": "fix_connection_duration_seconds",
+          "legendFormat": "{{host}}:{{local_addr}}"
+        }],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          }
+        }
+      },
+      {
+        "title": "按端口连接统计",
+        "type": "piechart",
+        "targets": [{
+          "expr": "fix_connections_by_port",
+          "legendFormat": "端口{{port}}"
+        }]
+      },
+      {
+        "title": "连接详情表格",
+        "type": "table",
+        "targets": [{
+          "expr": "fix_connection_duration_seconds",
+          "instant": true,
+          "format": "table"
+        }],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto",
+              "displayMode": "color-background"
+            }
+          }
+        }
+      },
+      {
+        "title": "服务器状态",
+        "type": "table",
+        "targets": [{
+          "expr": "up{job=\"fix-connections\"}",
+          "instant": true,
+          "format": "table"
+        }],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "center",
+              "displayMode": "color-background"
+            }
+          }
+        }
+      }
+    ],
+    "refresh": "10s"
+  }
+}
