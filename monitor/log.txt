@@ -1,0 +1,371 @@
+import os
+import re
+import time
+import json
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from time import strptime, mktime
+
+# -------------------------- 配置项 --------------------------
+LOG_FILE = "/var/log/stunnel/stunnel.log"  # stunnel日志路径
+HTTP_HOST = "0.0.0.0"                      # HTTP接口监听地址
+HTTP_PORT = 8081                           # HTTP接口端口
+LOG_CHECK_INTERVAL = 0.1                   # 日志读取间隔（秒）
+# ------------------------------------------------------------
+
+# 全局活跃连接（线程ID -> 连接详情），需加锁保护
+active_connections = {}
+conn_lock = threading.Lock()
+
+# 正则表达式：匹配各类连接事件
+# 1. 客户端连接Stunnel（accept事件）
+RE_ACCEPT = re.compile(
+    r'(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[(\d+)\]: Service .* accepted connection from ([\d\.]+):(\d+)'
+)
+# 2. Stunnel连接下游（connect事件，核心：匹配下游IP:端口）
+RE_CONNECT_DOWNSTREAM = re.compile(
+    r'(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[(\d+)\]: Connecting ([\d\.]+):(\d+) from .*'
+)
+# 3. 连接关闭事件
+RE_CLOSE = re.compile(
+    r'(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[(\d+)\]: Connection closed:.*'
+)
+
+def parse_log_timestamp(ts_str: str) -> float:
+    """将stunnel日志时间戳（YYYY/MM/DD HH:MM:SS）转为时间戳（秒）"""
+    try:
+        time_struct = strptime(ts_str, "%Y/%m/%d %H:%M:%S")
+        return mktime(time_struct)
+    except Exception as e:
+        print(f"时间戳解析失败: {e} | 原始字符串: {ts_str}", file=sys.stderr)
+        return None
+
+def tail_log():
+    """实时跟踪日志文件，解析连接事件（模拟tail -f）"""
+    file_handle = None
+    last_inode = None  # 用于检测日志轮转（inode变化则重新打开）
+    last_pos = 0       # 上次读取到的文件位置
+
+    while True:
+        try:
+            # 日志文件不存在则等待
+            if not os.path.exists(LOG_FILE):
+                print(f"日志文件 {LOG_FILE} 不存在，等待...", file=sys.stderr)
+                time.sleep(1)
+                continue
+
+            # 获取文件元信息（检测轮转）
+            stat = os.stat(LOG_FILE)
+            current_inode = stat.st_ino
+            current_size = stat.st_size
+
+            # 日志轮转/首次打开：重新打开文件
+            if (file_handle is None) or (current_inode != last_inode):
+                if file_handle:
+                    file_handle.close()
+                file_handle = open(LOG_FILE, 'r', encoding='utf-8')
+                last_inode = current_inode
+                last_pos = current_size  # 定位到文件末尾
+                print(f"重新打开日志文件（inode: {current_inode}）", file=sys.stderr)
+
+            # 定位到上次读取位置
+            file_handle.seek(last_pos)
+
+            # 读取新行并解析
+            while True:
+                line = file_handle.readline()
+                if not line:  # 无新行则退出循环
+                    break
+                parse_log_line(line.strip())
+                last_pos = file_handle.tell()  # 更新读取位置
+
+            # 处理日志被截断（轮转后新文件更小）
+            if current_size < last_pos:
+                last_pos = 0
+
+            time.sleep(LOG_CHECK_INTERVAL)
+
+        except Exception as e:
+            print(f"日志读取异常: {e}", file=sys.stderr)
+            time.sleep(1)
+
+    # 最终关闭文件（理论上不会执行到）
+    if file_handle:
+        file_handle.close()
+
+def parse_log_line(line: str):
+    """解析单条日志行，更新活跃连接状态（含下游地址）"""
+    global active_connections
+
+    # 1. 匹配「客户端连接Stunnel」事件（accept）
+    accept_match = RE_ACCEPT.match(line)
+    if accept_match:
+        ts_str, thread_id, src_ip, src_port = accept_match.groups()
+        start_time = parse_log_timestamp(ts_str)
+        if not start_time:
+            return
+        # 加锁更新活跃连接（初始下游为空）
+        with conn_lock:
+            active_connections[thread_id] = {
+                "source_ip": src_ip,
+                "source_port": src_port,
+                "start_time": start_time,
+                "start_time_str": ts_str,
+                "downstream_ip": None,  # 下游IP
+                "downstream_port": None  # 下游端口
+            }
+        print(f"新连接 | 线程ID: {thread_id} | 客户端: {src_ip}:{src_port}")
+        return
+
+    # 2. 匹配「Stunnel连接下游」事件（核心：记录下游地址）
+    connect_down_match = RE_CONNECT_DOWNSTREAM.match(line)
+    if connect_down_match:
+        _, thread_id, downstream_ip, downstream_port = connect_down_match.groups()
+        # 加锁更新下游信息（仅当连接已存在时）
+        with conn_lock:
+            if thread_id in active_connections:
+                active_connections[thread_id]["downstream_ip"] = downstream_ip
+                active_connections[thread_id]["downstream_port"] = downstream_port
+                print(f"下游绑定 | 线程ID: {thread_id} | 下游: {downstream_ip}:{downstream_port}")
+        return
+
+    # 3. 匹配「连接关闭」事件
+    close_match = RE_CLOSE.match(line)
+    if close_match:
+        _, thread_id = close_match.groups()
+        # 加锁移除活跃连接
+        with conn_lock:
+            if thread_id in active_connections:
+                # 打印关闭日志（含下游信息）
+                conn = active_connections[thread_id]
+                downstream = f"{conn['downstream_ip']}:{conn['downstream_port']}" if conn['downstream_ip'] else "未知"
+                print(f"连接关闭 | 线程ID: {thread_id} | 客户端: {conn['source_ip']}:{conn['source_port']} | 下游: {downstream}")
+                del active_connections[thread_id]
+        return
+
+class ConnectionAPIHandler(BaseHTTPRequestHandler):
+    """HTTP接口处理器：返回含下游信息的连接详情"""
+    def do_GET(self):
+        # 仅处理 /connections 接口
+        if self.path != '/connections':
+            self.send_response(404)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(b"404 Not Found")
+            return
+
+        # 构建响应数据（加锁读取，避免线程冲突）
+        with conn_lock:
+            active_copy = active_connections.copy()  # 复制避免遍历中修改
+
+        current_time = time.time()
+        response = {
+            "active_connections_count": len(active_copy),
+            "active_connections": [],
+            "timestamp": time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
+        }
+
+        # 补充每个连接的在线时长+下游信息
+        for tid, conn in active_copy.items():
+            duration = current_time - conn["start_time"]
+            # 格式化下游地址（未知则显示"未知"）
+            downstream = f"{conn['downstream_ip']}:{conn['downstream_port']}" if conn['downstream_ip'] else "未知"
+            response["active_connections"].append({
+                "thread_id": tid,
+                "source_ip": conn["source_ip"],
+                "source_port": conn["source_port"],
+                "start_time": conn["start_time_str"],
+                "online_seconds": round(duration, 2),
+                "online_human": time.strftime("%H:%M:%S", time.gmtime(duration)),  # 人性化时长
+                "downstream": downstream,  # 最终返回的下游地址
+                "downstream_ip": conn["downstream_ip"],
+                "downstream_port": conn["downstream_port"]
+            })
+
+        # 发送JSON响应
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(json.dumps(response, ensure_ascii=False, indent=2).encode('utf-8'))
+
+    # 禁用默认HTTP日志输出
+    def log_message(self, format, *args):
+        return
+
+def start_http_server():
+    """启动HTTP接口服务"""
+    server = HTTPServer((HTTP_HOST, HTTP_PORT), ConnectionAPIHandler)
+    print(f"HTTP接口已启动: http://{HTTP_HOST}:{HTTP_PORT}/connections")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.server_close()
+        print("HTTP服务已关闭")
+
+if __name__ == "__main__":
+    # 启动日志监控线程（守护线程）
+    log_thread = threading.Thread(target=tail_log, daemon=True)
+    log_thread.start()
+    print("日志监控线程已启动")
+
+    # 启动HTTP服务（主线程）
+    try:
+        start_http_server()
+    except KeyboardInterrupt:
+        print("\n程序手动终止", file=sys.stderr)
+        sys.exit(0)
+
+
+
+
+
+
+
+
+#!/usr/bin/env python3
+import re
+import sys
+import time
+import argparse
+from datetime import datetime
+from collections import defaultdict
+import os
+import select
+
+# ===================== 配置项（根据实际环境调整）=====================
+STUNNEL_LOG_PATH = "/var/log/stunnel/stunnel.log"  # stunnel 日志路径
+LOG_ENCODING = "utf-8"
+TIME_FORMAT = "%Y.%m.%d %H:%M:%S"  # stunnel 日志时间格式
+# stunnel 日志正则（适配 PROXY 协议启用后的格式）
+# 1. 连接建立日志行：2024.05.21 09:15:03 LOG5[1]: PROXY protocol v1: client 203.0.113.78:65432
+PROXY_PATTERN = re.compile(
+    r'^(?P<time>\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[\d+\]: PROXY protocol v\d+: client (?P<client_ip>\d+\.\d+\.\d+\.\d+):(?P<client_port>\d+)'
+)
+# 2. 连接关闭日志行：2024.05.21 09:16:03 LOG5[1]: Connection closed: 203.0.113.78:65432 → 10.0.0.10:8080
+CLOSE_PATTERN = re.compile(
+    r'^(?P<time>\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[\d+\]: Connection closed: (?P<client_ip>\d+\.\d+\.\d+\.\d+):(?P<client_port>\d+) → .+'
+)
+
+# ===================== 全局变量（维护连接状态）=====================
+# 在线连接：key=(client_ip, client_port), value=建立时间（datetime 对象）
+online_connections = dict()
+# 历史连接：key=(client_ip, client_port), value=(建立时间, 关闭时间, 时长(秒))
+history_connections = defaultdict(list)
+
+def parse_log_line(line):
+    """解析单条日志行，返回 (事件类型, 客户端IP, 端口, 时间)"""
+    # 匹配 PROXY 协议行（连接建立）
+    proxy_match = PROXY_PATTERN.match(line.strip())
+    if proxy_match:
+        time_str = proxy_match.group("time")
+        client_ip = proxy_match.group("client_ip")
+        client_port = proxy_match.group("client_port")
+        try:
+            log_time = datetime.strptime(time_str, TIME_FORMAT)
+            return ("connect", client_ip, client_port, log_time)
+        except ValueError:
+            return (None, None, None, None)
+    
+    # 匹配连接关闭行
+    close_match = CLOSE_PATTERN.match(line.strip())
+    if close_match:
+        time_str = close_match.group("time")
+        client_ip = close_match.group("client_ip")
+        client_port = close_match.group("client_port")
+        try:
+            log_time = datetime.strptime(time_str, TIME_FORMAT)
+            return ("close", client_ip, client_port, log_time)
+        except ValueError:
+            return (None, None, None, None)
+    
+    return (None, None, None, None)
+
+def tail_log_file(file_path):
+    """模拟 tail -f 实时读取日志文件，处理日志轮转"""
+    # 打开文件（二进制模式避免编码问题，后续解码）
+    with open(file_path, "rb") as f:
+        # 移动到文件末尾
+        f.seek(0, os.SEEK_END)
+        file_inode = os.fstat(f.fileno()).st_ino  # 记录文件 inode（处理轮转）
+        while True:
+            # 检查是否有新内容
+            line = f.readline()
+            if not line:
+                # 检查文件是否被轮转（inode 变化）
+                try:
+                    new_inode = os.stat(file_path).st_ino
+                    if new_inode != file_inode:
+                        # 日志轮转，重新打开文件
+                        f.close()
+                        f = open(file_path, "rb")
+                        f.seek(0, os.SEEK_END)
+                        file_inode = new_inode
+                    # 无新内容，等待 0.1 秒
+                    time.sleep(0.1)
+                    continue
+                except FileNotFoundError:
+                    # 日志文件被删除（轮转中），等待 1 秒重试
+                    time.sleep(1)
+                    continue
+            # 解码并处理行
+            line_str = line.decode(LOG_ENCODING, errors="ignore").strip()
+            yield line_str
+
+def update_connection_status(event_type, client_ip, client_port, log_time):
+    """更新连接状态（在线/历史）"""
+    key = (client_ip, client_port)
+    if event_type == "connect":
+        # 连接建立：加入在线列表
+        online_connections[key] = log_time
+        print(f"[CONNECT] {log_time.strftime(TIME_FORMAT)} | {client_ip}:{client_port} → 在线")
+    elif event_type == "close":
+        # 连接关闭：从在线列表移除，计算时长，加入历史
+        if key in online_connections:
+            connect_time = online_connections.pop(key)
+            duration = (log_time - connect_time).total_seconds()
+            history_connections[key].append((connect_time, log_time, duration))
+            print(f"[CLOSE]  {log_time.strftime(TIME_FORMAT)} | {client_ip}:{client_port} → 离线 | 连接时长：{duration:.2f} 秒")
+        else:
+            # 未捕获到建立事件（日志缺失）
+            print(f"[WARN]   {log_time.strftime(TIME_FORMAT)} | {client_ip}:{client_port} → 关闭但未找到建立记录")
+
+def print_online_connections():
+    """打印当前在线连接"""
+    print("\n===== 当前在线 TCP 连接 ======")
+    if not online_connections:
+        print("无在线连接")
+    else:
+        for (ip, port), connect_time in online_connections.items():
+            online_duration = (datetime.now() - connect_time).total_seconds()
+            print(f"IP: {ip}:{port} | 建立时间: {connect_time.strftime(TIME_FORMAT)} | 在线时长: {online_duration:.2f} 秒")
+    print("==============================\n")
+
+def main():
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description="Stunnel TCP 连接监控工具")
+    parser.add_argument("--online", action="store_true", help="仅打印当前在线连接并退出")
+    args = parser.parse_args()
+
+    # 仅查询在线连接
+    if args.online:
+        print_online_connections()
+        sys.exit(0)
+
+    # 实时监控日志
+    print(f"开始监控 stunnel 日志：{STUNNEL_LOG_PATH}")
+    print("=====================================")
+    try:
+        for line in tail_log_file(STUNNEL_LOG_PATH):
+            event_type, client_ip, client_port, log_time = parse_log_line(line)
+            if event_type and client_ip and client_port and log_time:
+                update_connection_status(event_type, client_ip, client_port, log_time)
+    except KeyboardInterrupt:
+        print("\n监控被手动终止")
+        print_online_connections()
+    except Exception as e:
+        print(f"\n监控异常：{str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
