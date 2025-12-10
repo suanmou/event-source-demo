@@ -653,3 +653,507 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+import os
+import sys
+import re
+import time
+import json
+import threading
+import http.server
+import logging
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+import glob
+
+# ======================== 常量配置 ========================
+STUNNEL_LOG_PATH = "/var/log/stunnel/stunnel.log"  # Stunnel主日志路径
+STUNNEL_LOG_PATTERN = "/var/log/stunnel/stunnel.log.*"  # 轮转日志匹配模式
+PERSIST_FILE = "/var/lib/stunnel_monitor/data.json"  # 连接状态持久化
+LOG_POS_FILE = "/var/lib/stunnel_monitor/log_pos.json"  # 日志读取位置持久化
+CONN_TIMEOUT = 86400  # 连接超时时间（秒）
+PERSIST_INTERVAL = 30  # 状态持久化间隔
+LOG_POS_INTERVAL = 5  # 日志位置持久化间隔（秒）
+HTTP_PORT = 8000
+HTTP_HOST = "0.0.0.0"
+LOG_MONITOR_INTERVAL = 0.1
+
+# ======================== 日志解析正则 ========================
+RE_ACCEPT = re.compile(
+    r'^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[\d+\]: Service \[(\w+)\] accepted connection from ([\d\.]+):(\d+)$'
+)
+RE_CONNECT_REMOTE = re.compile(
+    r'^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[\d+\]: Service \[(\w+)\] connected remote server from [\d\.]+:\d+ to ([\d\.]+):(\d+)$'
+)
+RE_CLOSE = re.compile(
+    r'^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[\d+\]: Service \[(\w+)\] closed connection from ([\d\.]+):(\d+)$'
+)
+
+# ======================== 连接状态模型（增强重启恢复） ========================
+class ConnectionState:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.online_conns: Dict[str, dict] = {}  # 在线连接
+        self.history_conns: List[dict] = []  # 历史连接
+        self.conn_id_set = set()  # 连接ID去重集合（避免重复解析）
+        self.timeout = CONN_TIMEOUT
+
+        # 初始化：先加载连接状态，再加载日志位置
+        self._load_persist_data()
+
+    def _parse_log_time(self, time_str: str) -> float:
+        """解析日志时间为时间戳"""
+        try:
+            dt = datetime.strptime(time_str, "%Y.%m.%d %H:%M:%S")
+            return dt.timestamp()
+        except Exception as e:
+            logging.error(f"解析时间失败: {time_str}, 错误: {e}")
+            return 0.0
+
+    def _gen_conn_id(self, service: str, src_ip: str, src_port: str, create_time: float) -> str:
+        """生成唯一连接ID"""
+        return f"{service}_{src_ip}_{src_port}_{int(create_time)}"
+
+    def _load_persist_data(self):
+        """加载连接状态持久化数据"""
+        if not os.path.exists(PERSIST_FILE):
+            os.makedirs(os.path.dirname(PERSIST_FILE), exist_ok=True)
+            return
+        try:
+            with open(PERSIST_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # 加载历史记录并去重
+                history = data.get("history", [])
+                for conn in history:
+                    conn_id = conn.get("conn_id")
+                    if conn_id and conn_id not in self.conn_id_set:
+                        self.history_conns.append(conn)
+                        self.conn_id_set.add(conn_id)
+                # 加载在线连接（过滤超时）
+                online = data.get("online", {})
+                now = time.time()
+                for conn_id, conn in online.items():
+                    if conn_id not in self.conn_id_set and now - conn["create_time"] < self.timeout:
+                        self.online_conns[conn_id] = conn
+                        self.conn_id_set.add(conn_id)
+                    elif conn_id not in self.conn_id_set:
+                        # 超时连接移入历史
+                        conn["close_time"] = now
+                        conn["duration"] = now - conn["create_time"]
+                        conn["status"] = "timeout"
+                        self.history_conns.append(conn)
+                        self.conn_id_set.add(conn_id)
+            logging.info(f"加载持久化数据：历史{len(self.history_conns)}条，在线{len(self.online_conns)}条")
+        except Exception as e:
+            logging.error(f"加载连接状态失败: {e}")
+
+    def _save_persist_data(self):
+        """保存连接状态"""
+        try:
+            with self.lock:
+                data = {
+                    "online": self.online_conns,
+                    "history": self.history_conns[-10000:],  # 仅保留最近1万条
+                }
+            with open(PERSIST_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            logging.debug("连接状态持久化成功")
+        except Exception as e:
+            logging.error(f"保存连接状态失败: {e}")
+
+    def update_accept_conn(self, log_line: str):
+        """处理连接建立日志（幂等）"""
+        match = RE_ACCEPT.match(log_line.strip())
+        if not match:
+            return
+        time_str, service, src_ip, src_port = match.groups()
+        create_time = self._parse_log_time(time_str)
+        if create_time == 0:
+            return
+        conn_id = self._gen_conn_id(service, src_ip, src_port, create_time)
+        if conn_id in self.conn_id_set:
+            return  # 已解析过，跳过
+        with self.lock:
+            self.online_conns[conn_id] = {
+                "conn_id": conn_id,
+                "service": service,
+                "src_ip": src_ip,
+                "src_port": src_port,
+                "create_time": create_time,
+                "create_time_str": time_str,
+                "dst_ip": None,
+                "dst_port": None,
+                "close_time": None,
+                "duration": None,
+                "status": "online"
+            }
+            self.conn_id_set.add(conn_id)
+        logging.debug(f"新增连接: {conn_id}")
+
+    def update_remote_conn(self, log_line: str):
+        """处理下游转发日志"""
+        match = RE_CONNECT_REMOTE.match(log_line.strip())
+        if not match:
+            return
+        time_str, service, dst_ip, dst_port = match.groups()
+        with self.lock:
+            for conn in self.online_conns.values():
+                if conn["service"] == service and conn["dst_ip"] is None:
+                    conn["dst_ip"] = dst_ip
+                    conn["dst_port"] = dst_port
+                    break
+        logging.debug(f"更新下游: {service} -> {dst_ip}:{dst_port}")
+
+    def update_close_conn(self, log_line: str):
+        """处理连接关闭日志（幂等）"""
+        match = RE_CLOSE.match(log_line.strip())
+        if not match:
+            return
+        time_str, service, src_ip, src_port = match.groups()
+        close_time = self._parse_log_time(time_str)
+        if close_time == 0:
+            return
+        with self.lock:
+            # 查找匹配的在线连接
+            target_conn_id = None
+            for conn_id, conn in self.online_conns.items():
+                if conn["service"] == service and conn["src_ip"] == src_ip and conn["src_port"] == src_port:
+                    target_conn_id = conn_id
+                    break
+            if target_conn_id and target_conn_id not in self.conn_id_set:
+                return
+            if target_conn_id:
+                # 更新状态并移入历史
+                conn = self.online_conns[target_conn_id]
+                conn["close_time"] = close_time
+                conn["duration"] = close_time - conn["create_time"]
+                conn["status"] = "closed"
+                self.history_conns.append(conn)
+                del self.online_conns[target_conn_id]
+                logging.debug(f"关闭连接: {target_conn_id}, 时长: {conn['duration']:.2f}秒")
+
+    def clean_timeout_conns(self):
+        """清理超时连接"""
+        now = time.time()
+        with self.lock:
+            for conn_id, conn in list(self.online_conns.items()):
+                if now - conn["create_time"] >= self.timeout:
+                    conn["close_time"] = now
+                    conn["duration"] = now - conn["create_time"]
+                    conn["status"] = "timeout"
+                    self.history_conns.append(conn)
+                    del self.online_conns[conn_id]
+                    logging.debug(f"清理超时连接: {conn_id}")
+
+    def get_online_conns(self) -> List[dict]:
+        """获取在线连接（带实时时长）"""
+        now = time.time()
+        with self.lock:
+            online = []
+            for conn in self.online_conns.values():
+                conn_copy = conn.copy()
+                conn_copy["duration"] = now - conn_copy["create_time"]
+                online.append(conn_copy)
+        return online
+
+    def get_history_conns(self, limit: int = 1000) -> List[dict]:
+        """获取历史连接"""
+        with self.lock:
+            return self.history_conns[-limit:]
+
+    def get_stats(self) -> dict:
+        """获取统计数据"""
+        now = time.time()
+        with self.lock:
+            online_count = len(self.online_conns)
+            history_count = len(self.history_conns)
+            durations = [c["duration"] for c in self.history_conns if c.get("duration")]
+            avg_duration = sum(durations)/len(durations) if durations else 0.0
+            # 按下游统计
+            dst_stats = {}
+            for conn in self.online_conns.values():
+                dst = f"{conn['dst_ip']}:{conn['dst_port']}" if conn["dst_ip"] else "unknown"
+                dst_stats[dst] = dst_stats.get(dst, 0) + 1
+            for conn in self.history_conns:
+                dst = f"{conn['dst_ip']}:{conn['dst_port']}" if conn["dst_ip"] else "unknown"
+                dst_stats[dst] = dst_stats.get(dst, 0) + 1
+        return {
+            "online_count": online_count,
+            "history_count": history_count,
+            "avg_duration": round(avg_duration, 2),
+            "dst_stats": dst_stats,
+            "update_time": now,
+            "update_time_str": datetime.fromtimestamp(now).strftime("%Y.%m.%d %H:%M:%S")
+        }
+
+# ======================== 日志监控类（增强重启回溯） ========================
+class StunnelLogMonitor(threading.Thread):
+    def __init__(self, log_path: str, conn_state: ConnectionState):
+        super().__init__(daemon=True)
+        self.log_path = log_path
+        self.log_pattern = STUNNEL_LOG_PATTERN
+        self.conn_state = conn_state
+        self.running = True
+        self.file_handle = None
+        self.file_inode = 0
+        self.file_pos = 0
+        self.log_pos_file = LOG_POS_FILE
+
+        # 初始化：先回溯旧日志，再恢复读取位置
+        self._init_log_backtrack()
+        self._load_log_pos()
+        self._init_file()
+
+    def _load_log_pos(self):
+        """加载上次的日志读取位置"""
+        if not os.path.exists(self.log_pos_file):
+            logging.info("无日志位置记录，从新开始")
+            return
+        try:
+            with open(self.log_pos_file, "r", encoding="utf-8") as f:
+                pos_data = json.load(f)
+                self.file_inode = pos_data.get("inode", 0)
+                self.file_pos = pos_data.get("pos", 0)
+            logging.info(f"恢复日志读取位置: inode={self.file_inode}, pos={self.file_pos}")
+        except Exception as e:
+            logging.error(f"加载日志位置失败: {e}")
+
+    def _save_log_pos(self):
+        """保存当前日志读取位置"""
+        try:
+            if not self.file_handle:
+                return
+            pos_data = {
+                "inode": self.file_inode,
+                "pos": self.file_pos,
+                "path": self.log_path,
+                "update_time": time.time()
+            }
+            with open(self.log_pos_file, "w", encoding="utf-8") as f:
+                json.dump(pos_data, f)
+            logging.debug("日志位置保存成功")
+        except Exception as e:
+            logging.error(f"保存日志位置失败: {e}")
+
+    def _get_rotated_logs(self):
+        """获取所有轮转的旧日志（按修改时间升序）"""
+        rotated_logs = glob.glob(self.log_pattern)
+        # 过滤主日志
+        rotated_logs = [f for f in rotated_logs if f != self.log_path]
+        # 按修改时间排序（旧→新）
+        rotated_logs.sort(key=lambda x: os.path.getmtime(x))
+        return rotated_logs
+
+    def _parse_log_file(self, file_path: str):
+        """解析单个日志文件（全量）"""
+        logging.info(f"开始解析日志文件: {file_path}")
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # 解析日志行
+                    self.conn_state.update_accept_conn(line)
+                    self.conn_state.update_remote_conn(line)
+                    self.conn_state.update_close_conn(line)
+            logging.info(f"解析完成: {file_path}，共处理{sum(1 for _ in open(file_path, 'r'))}行")
+        except Exception as e:
+            logging.error(f"解析日志文件{file_path}失败: {e}")
+
+    def _init_log_backtrack(self):
+        """启动时回溯所有未处理的轮转日志"""
+        rotated_logs = self._get_rotated_logs()
+        if not rotated_logs:
+            logging.info("无轮转日志需要回溯")
+            return
+        logging.info(f"发现{len(rotated_logs)}个轮转日志，开始回溯")
+        for log_file in rotated_logs:
+            self._parse_log_file(log_file)
+        logging.info("轮转日志回溯完成")
+
+    def _init_file(self):
+        """初始化主日志文件句柄"""
+        try:
+            if self.file_handle:
+                self.file_handle.close()
+            self.file_handle = open(self.log_path, "r", encoding="utf-8")
+            stat = os.stat(self.log_path)
+            # 如果inode匹配，恢复上次位置；否则从0开始
+            if stat.st_ino == self.file_inode:
+                self.file_handle.seek(self.file_pos)
+                logging.info(f"恢复主日志读取位置: pos={self.file_pos}")
+            else:
+                self.file_pos = 0
+                self.file_handle.seek(0)
+                logging.info(f"主日志inode变化，重置读取位置到0")
+            self.file_inode = stat.st_ino
+        except Exception as e:
+            logging.error(f"初始化主日志失败: {e}")
+            self.file_handle = None
+
+    def _check_log_rotate(self):
+        """检查日志轮转"""
+        try:
+            stat = os.stat(self.log_path)
+            # inode变化 → 日志轮转
+            if stat.st_ino != self.file_inode:
+                logging.info(f"检测到日志轮转: 旧inode={self.file_inode}, 新inode={stat.st_ino}")
+                # 先解析旧日志剩余内容
+                self.file_handle.seek(self.file_pos)
+                remaining = self.file_handle.read()
+                if remaining:
+                    for line in remaining.splitlines():
+                        self.conn_state.update_accept_conn(line)
+                        self.conn_state.update_remote_conn(line)
+                        self.conn_state.update_close_conn(line)
+                # 重新初始化文件
+                self._init_file()
+            # 文件被截断（如copytruncate）
+            elif stat.st_size < self.file_pos:
+                self.file_pos = 0
+                self.file_handle.seek(0)
+                logging.info("主日志被截断，重置读取位置")
+        except Exception as e:
+            logging.error(f"检查日志轮转失败: {e}")
+            self._init_file()
+
+    def run(self):
+        """日志监控主逻辑"""
+        pos_save_timer = time.time()
+        while self.running:
+            try:
+                if not self.file_handle:
+                    time.sleep(1)
+                    self._init_file()
+                    continue
+
+                # 检查日志轮转
+                self._check_log_rotate()
+
+                # 读取新增内容
+                new_content = self.file_handle.read()
+                if new_content:
+                    lines = new_content.splitlines()
+                    self.file_pos = self.file_handle.tell()
+                    # 解析日志行
+                    for line in lines:
+                        self.conn_state.update_accept_conn(line)
+                        self.conn_state.update_remote_conn(line)
+                        self.conn_state.update_close_conn(line)
+
+                # 定期保存日志位置
+                if time.time() - pos_save_timer >= LOG_POS_INTERVAL:
+                    self._save_log_pos()
+                    pos_save_timer = time.time()
+
+                time.sleep(LOG_MONITOR_INTERVAL)
+            except Exception as e:
+                logging.error(f"日志监控异常: {e}")
+                time.sleep(1)
+
+    def stop(self):
+        """停止监控"""
+        self.running = False
+        if self.file_handle:
+            self.file_handle.close()
+        self._save_log_pos()  # 最后一次保存位置
+
+# ======================== HTTP接口/持久化线程（无修改） ========================
+class ConnMonitorHTTPHandler(http.server.BaseHTTPRequestHandler):
+    conn_state: ConnectionState = None
+
+    def _send_json_response(self, data: dict, status_code: int = 200):
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+
+    def do_GET(self):
+        try:
+            if self.path == "/api/online":
+                online = self.conn_state.get_online_conns()
+                self._send_json_response({"code":0, "msg":"success", "data":online})
+            elif self.path == "/api/history":
+                limit = int(self.headers.get("Limit", 1000))
+                history = self.conn_state.get_history_conns(limit)
+                self._send_json_response({"code":0, "msg":"success", "data":history})
+            elif self.path == "/api/stats":
+                stats = self.conn_state.get_stats()
+                self._send_json_response({"code":0, "msg":"success", "data":stats})
+            elif self.path == "/api/health":
+                self._send_json_response({"code":0, "msg":"healthy", "data":{"timestamp":time.time()}})
+            else:
+                self._send_json_response({"code":404, "msg":"not found"}, 404)
+        except Exception as e:
+            logging.error(f"HTTP接口异常: {e}")
+            self._send_json_response({"code":500, "msg":str(e)}, 500)
+
+class PersistThread(threading.Thread):
+    def __init__(self, conn_state: ConnectionState, interval: int = PERSIST_INTERVAL):
+        super().__init__(daemon=True)
+        self.conn_state = conn_state
+        self.interval = interval
+        self.running = True
+
+    def run(self):
+        while self.running:
+            time.sleep(self.interval)
+            self.conn_state._save_persist_data()
+            self.conn_state.clean_timeout_conns()
+
+    def stop(self):
+        self.running = False
+
+# ======================== 主程序 ========================
+def main():
+    # 配置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler("/var/log/stunnel_monitor/monitor.log", encoding="utf-8")
+        ]
+    )
+
+    # 初始化连接状态
+    conn_state = ConnectionState()
+
+    # 绑定HTTP接口
+    ConnMonitorHTTPHandler.conn_state = conn_state
+
+    # 启动日志监控（含重启回溯）
+    log_monitor = StunnelLogMonitor(STUNNEL_LOG_PATH, conn_state)
+    log_monitor.start()
+    logging.info("日志监控线程启动（含重启回溯）")
+
+    # 启动持久化线程
+    persist_thread = PersistThread(conn_state)
+    persist_thread.start()
+    logging.info("持久化线程启动")
+
+    # 启动HTTP服务
+    server_address = (HTTP_HOST, HTTP_PORT)
+    httpd = http.server.ThreadingHTTPServer(server_address, ConnMonitorHTTPHandler)
+    logging.info(f"HTTP服务启动: http://{HTTP_HOST}:{HTTP_PORT}")
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        logging.info("接收到停止信号，正在退出...")
+        # 停止线程
+        log_monitor.stop()
+        persist_thread.stop()
+        # 关闭HTTP服务
+        httpd.shutdown()
+        # 最后一次持久化
+        conn_state._save_persist_data()
+        logging.info("程序正常退出")
+
+if __name__ == "__main__":
+    main()
