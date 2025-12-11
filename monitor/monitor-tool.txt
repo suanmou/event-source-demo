@@ -1157,3 +1157,239 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+#!/usr/bin/env python3
+import re
+import sys
+import os
+import time
+import threading
+import argparse
+from datetime import datetime
+from collections import defaultdict
+
+# ===================== 核心配置（根据实际环境调整）=====================
+# 1. stunnel 日志根目录（所有 stunnel-port.log 存放路径）
+STUNNEL_LOG_DIR = "/var/log/stunnel/"
+# 2. 日志文件名匹配规则（匹配 stunnel-端口.log，如 stunnel-443.log）
+STUNNEL_LOG_PATTERN = r"stunnel-(\d+)\.log"
+# 3. stunnel 日志时间格式（需与 stunnel.conf 输出格式一致）
+STUNNEL_TIME_FORMAT = "%Y.%m.%d %H:%M:%S"
+# 4. 时区配置（若 stunnel 日志为本地时区，需对应修改）
+LOCAL_TIMEZONE = "Asia/Shanghai"  # 替换为 VM 本地时区（如 UTC）
+
+# ===================== 全局变量（线程安全）=====================
+# 在线连接存储：key=(stunnel_port, client_ip, client_port) → value=连接信息字典
+online_connections = dict()
+# 线程锁：保护 online_connections 读写（多线程安全）
+conn_lock = threading.Lock()
+
+# ===================== 日志解析正则（仅解析 stunnel 原生日志）=====================
+# 1. 连接建立日志行：2024.05.24 10:00:00 LOG5[1]: Service [xxx] accepted connection from 10.128.0.20:56789
+CONNECT_PATTERN = re.compile(
+    r'^(?P<log_time>\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[\d+\]: Service .+ accepted connection from (?P<client_ip>\d+\.\d+\.\d+\.\d+):(?P<client_port>\d+)'
+)
+# 2. 连接关闭日志行：2024.05.24 10:01:00 LOG5[1]: Connection closed: 10.128.0.20:56789 → 10.0.0.10:8080
+CLOSE_PATTERN = re.compile(
+    r'^(?P<log_time>\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}) LOG\d+\[\d+\]: Connection closed: (?P<client_ip>\d+\.\d+\.\d+\.\d+):(?P<client_port>\d+) → .+'
+)
+
+# ===================== 单日志文件实时监听（tail -f）=====================
+def tail_single_log(log_path: str, stunnel_port: str):
+    """
+    实时监听单个 stunnel 日志文件
+    :param log_path: 日志文件路径（如 /var/log/stunnel/stunnel-443.log）
+    :param stunnel_port: stunnel 监听端口（从文件名提取，如 443）
+    """
+    print(f"[INFO] 开始监听日志：{log_path}（对应 stunnel 端口：{stunnel_port}）")
+    try:
+        with open(log_path, "rb") as f:
+            # 移动到文件末尾，只读取新内容
+            f.seek(0, os.SEEK_END)
+            # 记录文件 inode（用于检测日志轮转）
+            file_inode = os.fstat(f.fileno()).st_ino
+
+            while True:
+                # 检测日志轮转（文件 inode 变化，如 logrotate 重命名后重建）
+                try:
+                    new_inode = os.stat(log_path).st_ino
+                    if new_inode != file_inode:
+                        print(f"[INFO] 检测到日志轮转：{log_path}，重新打开文件")
+                        f.close()
+                        f = open(log_path, "rb")
+                        f.seek(0, os.SEEK_END)
+                        file_inode = new_inode
+                except FileNotFoundError:
+                    # 日志文件被删除（轮转中），等待 1 秒重试
+                    time.sleep(1)
+                    continue
+
+                # 读取新行（无内容则等待 0.1 秒）
+                line = f.readline()
+                if not line:
+                    time.sleep(0.1)
+                    continue
+
+                # 解码日志行（忽略编码错误）
+                line_str = line.decode("utf-8", errors="ignore").strip()
+                # 解析日志行并更新在线连接
+                parse_log_line(line_str, stunnel_port)
+
+    except Exception as e:
+        print(f"[ERROR] 监听日志 {log_path} 失败：{str(e)}")
+
+# ===================== 日志行解析（连接建立/关闭）=====================
+def parse_log_line(line_str: str, stunnel_port: str):
+    """
+    解析单条 stunnel 日志行，更新在线连接状态
+    :param line_str: 日志行字符串
+    :param stunnel_port: stunnel 监听端口
+    """
+    # 1. 解析「连接建立」日志
+    connect_match = CONNECT_PATTERN.match(line_str)
+    if connect_match:
+        try:
+            # 提取日志字段
+            client_ip = connect_match.group("client_ip")
+            client_port = connect_match.group("client_port")
+            log_time_str = connect_match.group("log_time")
+            # 转换日志时间为 datetime 对象
+            log_time = datetime.strptime(log_time_str, STUNNEL_TIME_FORMAT)
+
+            # 构建连接唯一标识（避免不同 stunnel 服务的同 IP:Port 混淆）
+            conn_key = (stunnel_port, client_ip, client_port)
+            # 加锁更新在线连接（线程安全）
+            with conn_lock:
+                online_connections[conn_key] = {
+                    "stunnel_port": stunnel_port,
+                    "client_ip": client_ip,
+                    "client_port": client_port,
+                    "connect_time": log_time,
+                    "online_duration": 0  # 在线时长（秒），实时计算
+                }
+
+            print(f"[CONNECT] stunnel:{stunnel_port} | 客户端 {client_ip}:{client_port} 建立连接 | 时间：{log_time_str}")
+        except Exception as e:
+            print(f"[ERROR] 解析连接建立日志失败：{line_str} → {str(e)}")
+        return
+
+    # 2. 解析「连接关闭」日志
+    close_match = CLOSE_PATTERN.match(line_str)
+    if close_match:
+        try:
+            # 提取日志字段
+            client_ip = close_match.group("client_ip")
+            client_port = close_match.group("client_port")
+            log_time_str = close_match.group("log_time")
+            log_time = datetime.strptime(log_time_str, STUNNEL_TIME_FORMAT)
+
+            # 构建连接唯一标识，从在线连接中移除
+            conn_key = (stunnel_port, client_ip, client_port)
+            with conn_lock:
+                if conn_key in online_connections:
+                    # 计算连接时长
+                    conn_info = online_connections.pop(conn_key)
+                    connect_time = conn_info["connect_time"]
+                    duration = (log_time - connect_time).total_seconds()
+                    print(f"[CLOSE] stunnel:{stunnel_port} | 客户端 {client_ip}:{client_port} 断开连接 | 时间：{log_time_str} | 连接时长：{duration:.2f} 秒")
+                else:
+                    print(f"[WARN] stunnel:{stunnel_port} | 客户端 {client_ip}:{client_port} 关闭连接，但未找到建立记录")
+        except Exception as e:
+            print(f"[ERROR] 解析连接关闭日志失败：{line_str} → {str(e)}")
+        return
+
+# ===================== 扫描所有 stunnel 日志并启动监听线程 =====================
+def scan_and_monitor_all_logs():
+    """扫描所有 stunnel-*.log 文件，启动独立线程监听"""
+    print(f"[INFO] 开始扫描日志目录：{STUNNEL_LOG_DIR}")
+    monitor_threads = []
+
+    # 遍历日志目录，匹配 stunnel-端口.log 格式
+    for filename in os.listdir(STUNNEL_LOG_DIR):
+        log_match = re.match(STUNNEL_LOG_PATTERN, filename)
+        if log_match:
+            # 从文件名提取 stunnel 端口（如 stunnel-443.log → 443）
+            stunnel_port = log_match.group(1)
+            log_path = os.path.join(STUNNEL_LOG_DIR, filename)
+            # 启动独立线程监听单个日志文件（守护线程，随主线程退出）
+            t = threading.Thread(
+                target=tail_single_log,
+                args=(log_path, stunnel_port),
+                daemon=True
+            )
+            t.start()
+            monitor_threads.append(t)
+            time.sleep(0.1)  # 避免同时启动过多线程
+
+    # 无匹配的日志文件
+    if not monitor_threads:
+        print(f"[WARN] 未找到匹配的日志文件（{STUNNEL_LOG_PATTERN}），请检查日志路径和命名")
+        sys.exit(1)
+
+    print(f"[INFO] 共启动 {len(monitor_threads)} 个日志监听线程")
+    # 等待所有线程（主线程阻塞，不退出）
+    for t in monitor_threads:
+        t.join()
+
+# ===================== 打印所有在线连接 =====================
+def print_online_connections():
+    """控制台打印所有 stunnel 服务的在线连接"""
+    print("\n" + "="*80)
+    print(f"所有 stunnel 服务在线连接汇总 | 统计时间：{datetime.now().strftime(STUNNEL_TIME_FORMAT)}")
+    print("="*80)
+
+    with conn_lock:
+        if not online_connections:
+            print("无在线连接")
+        else:
+            # 按 stunnel 端口分组展示
+            grouped_conns = defaultdict(list)
+            for conn_key, conn_info in online_connections.items():
+                grouped_conns[conn_info["stunnel_port"]].append(conn_info)
+
+            # 遍历每个 stunnel 端口的在线连接
+            for st_port, conn_list in grouped_conns.items():
+                print(f"\nstunnel 端口 {st_port} | 在线连接数：{len(conn_list)}")
+                print("-"*60)
+                for conn in conn_list:
+                    # 实时计算在线时长
+                    online_duration = (datetime.now() - conn["connect_time"]).total_seconds()
+                    print(
+                        f"客户端 IP: {conn['client_ip']}:{conn['client_port']} | "
+                        f"建立时间: {conn['connect_time'].strftime(STUNNEL_TIME_FORMAT)} | "
+                        f"在线时长: {online_duration:.2f} 秒"
+                    )
+
+    print("="*80 + "\n")
+
+# ===================== 主函数（命令行参数处理）=====================
+def main():
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description="Stunnel 多日志监听 & 在线连接监控工具（无 GCP 依赖）")
+    parser.add_argument(
+        "--online",
+        action="store_true",
+        help="仅打印当前所有在线连接并退出（不启动日志监听）"
+    )
+    args = parser.parse_args()
+
+    # 仅查询在线连接
+    if args.online:
+        print_online_connections()
+        sys.exit(0)
+
+    # 启动日志监听（主线程阻塞）
+    try:
+        scan_and_monitor_all_logs()
+    except KeyboardInterrupt:
+        print("\n[INFO] 手动终止监听，打印最终在线连接：")
+        print_online_connections()
+        sys.exit(0)
+    except Exception as e:
+        print(f"[FATAL] 启动监听失败：{str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
