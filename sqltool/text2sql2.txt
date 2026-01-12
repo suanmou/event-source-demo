@@ -1,0 +1,480 @@
+import os
+import re
+import zlib
+import time
+import jieba
+import sqlglot
+import sqlite3
+import hashlib
+from openai import OpenAI
+from dotenv import load_dotenv
+from typing import List, Dict, Optional, Tuple, BinaryIO
+from pydantic import BaseModel, Field
+from slugify import slugify
+
+# 加载环境变量
+load_dotenv()
+
+# ------------------- 1. 基础模型定义（模板+权限） -------------------
+class User(BaseModel):
+    """用户模型（用于权限控制）"""
+    user_id: str
+    username: str
+    role: str = Field(default="user", pattern="^(admin|user)$")  # 仅支持admin/user
+
+class PromptTemplate(BaseModel):
+    """Prompt模板模型（含权限+大Prompt优化字段）"""
+    template_id: Optional[str] = None  # 自动生成唯一ID
+    template_name: str  # 模板名称
+    template_desc: str  # 模板描述（简短）
+    prompt_content: str  # Prompt原始内容
+    prompt_summary: Optional[str] = None  # Prompt摘要（大文本预览用）
+    prompt_compressed: Optional[bytes] = None  # 压缩后的Prompt内容（存储用）
+    creator_id: str  # 创建人ID（关联User.user_id）
+    role_scope: str = "user"  # 模板可见范围：user（仅创建人）/admin（仅管理员）/all（所有人）
+    version: str = "1.0"  # 模板版本
+    create_time: Optional[int] = None  # 创建时间戳
+    update_time: Optional[int] = None  # 更新时间戳
+
+# ------------------- 2. Prompt模板管理类（核心：保存/加载/权限/大Prompt处理） -------------------
+class PromptTemplateManager:
+    def __init__(self, db_path: str = "./prompt_templates.db"):
+        """初始化模板管理器（SQLite）"""
+        self.db_path = db_path
+        self._init_db()  # 初始化数据库表
+        self.llm_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    def _init_db(self):
+        """初始化模板表（含压缩存储+权限字段）"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        # 创建模板表：重点包含压缩内容、摘要、权限字段
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS prompt_templates (
+            template_id TEXT PRIMARY KEY,
+            template_name TEXT NOT NULL,
+            template_desc TEXT,
+            prompt_summary TEXT,  -- 摘要（预览用）
+            prompt_compressed BLOB,  -- 压缩后的Prompt内容
+            creator_id TEXT NOT NULL,
+            role_scope TEXT NOT NULL DEFAULT 'user',
+            version TEXT NOT NULL DEFAULT '1.0',
+            create_time INTEGER,
+            update_time INTEGER
+        )
+        ''')
+        conn.commit()
+        conn.close()
+
+    def _generate_template_id(self, template_name: str, creator_id: str) -> str:
+        """生成唯一模板ID（避免重复）"""
+        slug = slugify(template_name)
+        timestamp = str(int(time.time()))
+        unique_str = f"{slug}_{creator_id}_{timestamp}"
+        return hashlib.md5(unique_str.encode()).hexdigest()[:16]
+
+    def _compress_prompt(self, prompt: str) -> bytes:
+        """压缩大Prompt内容（zlib）"""
+        return zlib.compress(prompt.encode("utf-8"), level=6)
+
+    def _decompress_prompt(self, compressed_data: bytes) -> str:
+        """解压Prompt内容"""
+        return zlib.decompress(compressed_data).decode("utf-8")
+
+    def _generate_prompt_summary(self, prompt: str, max_length: int = 100) -> str:
+        """生成Prompt摘要（大文本预览用）：提取关键词+核心规则"""
+        # 步骤1：提取核心信息（表名、用户查询、核心规则）
+        table_match = re.search(r"物理表名：(.*?)\n", prompt)
+        query_match = re.search(r"【用户查询（已预处理）】\n(.*?)\n\n", prompt, re.DOTALL)
+        rule_match = re.search(r"【核心规则】\n(.*?)\n\n【表字典信息】", prompt, re.DOTALL)
+        
+        # 步骤2：中文分词提取关键词
+        seg_list = jieba.lcut(prompt)
+        keywords = [word for word in seg_list if len(word) > 1 and word not in ["字段", "表名", "SQL", "查询"]]
+        top_keywords = ",".join(list(set(keywords))[:5])  # 取前5个不重复关键词
+        
+        # 步骤3：拼接摘要
+        summary_parts = []
+        if table_match:
+            summary_parts.append(f"表：{table_match.group(1)}")
+        if query_match:
+            summary_parts.append(f"查询：{query_match.group(1)[:30]}...")
+        summary_parts.append(f"关键词：{top_keywords}")
+        
+        summary = " | ".join(summary_parts)
+        # 截断到指定长度
+        return summary[:max_length] + "..." if len(summary) > max_length else summary
+
+    def _check_permission(self, user: User, template: PromptTemplate) -> bool:
+        """权限校验：判断用户是否有权限操作模板"""
+        # admin角色拥有所有权限
+        if user.role == "admin":
+            return True
+        # 普通用户：仅能操作自己创建的、且role_scope为user/all的模板
+        if user.user_id == template.creator_id and template.role_scope in ["user", "all"]:
+            return True
+        # 普通用户可查看role_scope为all的模板，但不能修改/删除
+        return False
+
+    def save_template(self, template: PromptTemplate, user: User) -> Tuple[bool, Optional[str]]:
+        """
+        保存Prompt模板（自动压缩+生成摘要+权限校验）
+        :param template: 模板对象（无需传template_id/create_time/update_time）
+        :param user: 当前操作用户
+        :return: (是否成功, 模板ID/错误信息)
+        """
+        # 1. 权限前置校验：普通用户不能创建admin级模板
+        if user.role != "admin" and template.role_scope == "admin":
+            return False, "普通用户无权创建仅管理员可见的模板"
+        
+        # 2. 处理大Prompt：压缩+生成摘要
+        template.prompt_compressed = self._compress_prompt(template.prompt_content)
+        template.prompt_summary = self._generate_prompt_summary(template.prompt_content)
+        
+        # 3. 自动填充元信息
+        template.template_id = self._generate_template_id(template.template_name, user.user_id)
+        template.create_time = template.create_time or int(time.time())
+        template.update_time = int(time.time())
+        template.creator_id = user.user_id  # 强制绑定创建人
+        
+        # 4. 写入数据库
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+            INSERT OR REPLACE INTO prompt_templates (
+                template_id, template_name, template_desc, prompt_summary,
+                prompt_compressed, creator_id, role_scope, version, create_time, update_time
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                template.template_id, template.template_name, template.template_desc,
+                template.prompt_summary, template.prompt_compressed, template.creator_id,
+                template.role_scope, template.version, template.create_time, template.update_time
+            ))
+            conn.commit()
+            conn.close()
+            return True, template.template_id
+        except Exception as e:
+            return False, f"保存模板失败：{str(e)}"
+
+    def load_template(self, template_id: str, user: User) -> Tuple[Optional[PromptTemplate], Optional[str]]:
+        """
+        加载模板（自动解压+权限校验）
+        :param template_id: 模板ID
+        :param user: 当前操作用户
+        :return: (模板对象/None, 错误信息/None)
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+            SELECT * FROM prompt_templates WHERE template_id = ?
+            ''', (template_id,))
+            row = cursor.fetchone()
+            conn.close()
+            
+            if not row:
+                return None, "模板不存在"
+            
+            # 构造模板对象
+            template = PromptTemplate(
+                template_id=row[0],
+                template_name=row[1],
+                template_desc=row[2],
+                prompt_summary=row[3],
+                prompt_compressed=row[4],
+                creator_id=row[5],
+                role_scope=row[6],
+                version=row[7],
+                create_time=row[8],
+                update_time=row[9]
+            )
+            
+            # 权限校验
+            if not self._check_permission(user, template):
+                return None, "无权限访问该模板"
+            
+            # 解压Prompt内容（大文本按需加载）
+            template.prompt_content = self._decompress_prompt(template.prompt_compressed)
+            return template, None
+        except Exception as e:
+            return None, f"加载模板失败：{str(e)}"
+
+    def list_templates(self, user: User, page: int = 1, page_size: int = 10) -> Tuple[List[Dict], Optional[str]]:
+        """
+        分页列出用户有权限查看的模板（仅返回摘要，不返回完整内容，解决大Prompt显示问题）
+        :param user: 当前用户
+        :param page: 页码
+        :param page_size: 每页条数
+        :return: (模板列表（含摘要）, 错误信息)
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 构造权限过滤条件
+            if user.role == "admin":
+                # 管理员查看所有模板
+                where_clause = "1=1"
+                params = ()
+            else:
+                # 普通用户查看自己创建的+所有人可见的
+                where_clause = "creator_id = ? OR role_scope = 'all'"
+                params = (user.user_id,)
+            
+            # 分页查询（仅返回摘要等元信息，不返回完整Prompt）
+            offset = (page - 1) * page_size
+            cursor.execute(f'''
+            SELECT template_id, template_name, template_desc, prompt_summary, 
+                   creator_id, role_scope, version, create_time
+            FROM prompt_templates WHERE {where_clause}
+            LIMIT ? OFFSET ?
+            ''', (*params, page_size, offset))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            # 转换为字典（前端展示用，仅含摘要）
+            templates = []
+            for row in rows:
+                templates.append({
+                    "template_id": row[0],
+                    "template_name": row[1],
+                    "template_desc": row[2],
+                    "prompt_summary": row[3],  # 仅展示摘要，不展示完整内容
+                    "creator_id": row[4],
+                    "role_scope": row[5],
+                    "version": row[6],
+                    "create_time": time.strftime("%Y-%m-%d %H:%M", time.localtime(row[7]))
+                })
+            return templates, None
+        except Exception as e:
+            return [], f"列出模板失败：{str(e)}"
+
+    def delete_template(self, template_id: str, user: User) -> Tuple[bool, Optional[str]]:
+        """删除模板（权限校验）"""
+        # 先加载模板校验权限
+        template, error = self.load_template(template_id, user)
+        if error:
+            return False, error
+        if not template:
+            return False, "模板不存在"
+        
+        # 仅管理员或创建人可删除
+        if user.role != "admin" and user.user_id != template.creator_id:
+            return False, "无权限删除该模板"
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM prompt_templates WHERE template_id = ?', (template_id,))
+            conn.commit()
+            conn.close()
+            return True, None
+        except Exception as e:
+            return False, f"删除模板失败：{str(e)}"
+
+    def get_prompt_ui_display(self, prompt_content: str, fold_length: int = 200) -> Dict:
+        """
+        生成大Prompt的界面展示格式（折叠+分段+高亮）
+        :param prompt_content: 原始Prompt内容
+        :param fold_length: 折叠阈值（超过则只显示开头+展开按钮）
+        :return: 展示用字典（is_folded, folded_content, full_content, segments）
+        """
+        # 1. 判断是否需要折叠
+        is_folded = len(prompt_content) > fold_length
+        
+        # 2. 折叠内容（开头+提示）
+        folded_content = prompt_content[:fold_length] + f"\n\n[...内容过长，共{len(prompt_content)}字符，点击展开查看全部]" if is_folded else prompt_content
+        
+        # 3. 分段显示（按【】标题分段，方便前端渲染）
+        segments = re.split(r"(【.*?】)", prompt_content)
+        formatted_segments = []
+        for seg in segments:
+            if seg.startswith("【") and seg.endswith("】"):
+                # 标题段
+                formatted_segments.append({"type": "title", "content": seg})
+            elif seg.strip():
+                # 内容段
+                formatted_segments.append({"type": "content", "content": seg.strip()})
+        
+        # 4. 关键词高亮（表名、用户查询、核心规则）
+        highlighted_content = prompt_content
+        # 高亮表名
+        table_matches = re.findall(r"物理表名：(.*?)\n", prompt_content)
+        for table in table_matches:
+            highlighted_content = highlighted_content.replace(table, f"<mark>{table}</mark>")
+        # 高亮用户查询
+        query_matches = re.findall(r"【用户查询（已预处理）】\n(.*?)\n\n", prompt_content, re.DOTALL)
+        for query in query_matches:
+            highlighted_content = highlighted_content.replace(query, f"<mark>{query}</mark>")
+        
+        return {
+            "is_folded": is_folded,
+            "folded_content": folded_content,
+            "full_content": prompt_content,
+            "segments": formatted_segments,  # 分段渲染用
+            "highlighted_content": highlighted_content,  # 高亮渲染用
+            "char_count": len(prompt_content)  # 字符数统计
+        }
+
+# ------------------- 3. 集成到原有Text2Sql工具 -------------------
+class OptimizedDuckDBText2SqlTool:
+    def __init__(
+        self,
+        table_dicts: List[Dict],  # 简化：复用之前的表字典结构
+        duckdb_dialect: str = "duckdb",
+        template_manager: Optional[PromptTemplateManager] = None
+    ):
+        self.table_dicts = table_dicts
+        self.duckdb_dialect = duckdb_dialect
+        self.template_manager = template_manager or PromptTemplateManager()
+        self.llm_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    # 复用之前的_preprocess_user_query/_build_enhanced_prompt/_validate_sql_match等方法
+    def _preprocess_user_query(self, user_query: str) -> str:
+        seg_list = jieba.lcut(user_query)
+        processed_query = "".join(seg_list)
+        if "1月" in processed_query and "年" not in processed_query:
+            processed_query = processed_query.replace("1月", "2026年1月")
+        return processed_query
+
+    def _build_enhanced_prompt(self, processed_query: str) -> str:
+        table_dict_text = "\n".join([f"表：{t['table_name']}，字段：{[f['field_name'] for f in t['fields']]}" for t in self.table_dicts])
+        prompt = f"""
+        【核心规则】仅生成DuckDB的SELECT语句，禁止修改数据。
+        【表字典信息】{table_dict_text}
+        【用户查询】{processed_query}
+        生成精准匹配的SQL：
+        """
+        return prompt.strip()
+
+    def generate_matched_sql(self, user_query: str) -> Tuple[str, Optional[str]]:
+        processed_query = self._preprocess_user_query(user_query)
+        prompt = self._build_enhanced_prompt(processed_query)
+        try:
+            response = self.llm_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1
+            )
+            return response.choices[0].message.content.strip(), None
+        except Exception as e:
+            return "", f"生成SQL失败：{str(e)}"
+
+    # 新增：基于模板生成SQL
+    def generate_sql_from_template(self, template_id: str, user: User) -> Tuple[str, Optional[str]]:
+        """加载模板并生成SQL"""
+        template, error = self.template_manager.load_template(template_id, user)
+        if error:
+            return "", f"加载模板失败：{error}"
+        try:
+            response = self.llm_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": template.prompt_content}],
+                temperature=0.1
+            )
+            return response.choices[0].message.content.strip(), None
+        except Exception as e:
+            return "", f"基于模板生成SQL失败：{str(e)}"
+
+# ------------------- 4. 测试示例 -------------------
+if __name__ == "__main__":
+    # 1. 初始化用户（模拟权限）
+    admin_user = User(user_id="admin_001", username="管理员", role="admin")
+    normal_user = User(user_id="user_001", username="普通用户", role="user")
+
+    # 2. 初始化模板管理器
+    template_manager = PromptTemplateManager()
+
+    # 3. 构造大Prompt示例（模拟大文本场景）
+    big_prompt = """
+    你是精通DuckDB SQL的业务专家，需根据以下规则生成精准匹配用户意图的只读SELECT语句：
+    【核心规则】
+    1. 语义匹配优先：必须严格对齐用户查询的业务意图，字段/表名优先使用物理名；
+    2. 语法合规：仅生成duckdb方言兼容的SQL，禁止INSERT/UPDATE/DELETE/DROP等修改语句；
+    3. 业务约束：必须遵守字段的业务约束（如金额>=0、日期格式YYYY-MM-DD）；
+    4. 枚举值匹配：筛选字段时必须使用给定的枚举值；
+    5. 只返回SQL语句，无任何额外解释、注释。
+
+    【表字典信息】
+    物理表名：sales
+    业务表名：销售订单表|订单表
+    表含义：存储所有产品的销售订单信息
+    关联关系：无关联表
+    字段列表：
+    - id（订单ID）：销售订单唯一标识，类型：INTEGER，枚举值：[]，约束：id>0
+    - product_name（产品名称|商品名称）：销售产品的名称，类型：VARCHAR，枚举值：["手机", "电脑", "平板"]，约束：
+    - sale_date（销售日期|下单日期）：订单成交日期，类型：DATE，枚举值：[]，约束：日期格式为YYYY-MM-DD
+    - amount（订单金额|销售额）：订单的成交金额（元），类型：FLOAT，枚举值：[]，约束：amount>=0
+
+    【匹配示例（参考逻辑）】
+    示例1：
+    用户查询：查询2026年1月的手机销售额
+    生成SQL：SELECT product_name, SUM(amount) AS total_sales FROM sales WHERE product_name = '手机' AND sale_date BETWEEN '2026-01-01' AND '2026-01-31' GROUP BY product_name
+    匹配逻辑：筛选product_name为手机，sale_date在2026年1月，对amount求和得到销售额
+
+    【用户查询（已预处理）】
+    查询1月手机的销售额总和（销售额指amount字段求和）
+
+    【生成要求】
+    生成的SQL必须100%匹配用户查询的业务意图，字段/表名准确，聚合/筛选逻辑正确：
+    """ * 5  # 重复5次模拟大Prompt
+
+    # 4. 保存模板（普通用户）
+    template = PromptTemplate(
+        template_name="销售订单查询模板",
+        template_desc="用于查询销售订单的通用Prompt模板",
+        prompt_content=big_prompt,
+        role_scope="all"  # 所有人可见
+    )
+    success, template_id = template_manager.save_template(template, normal_user)
+    if success:
+        print(f"模板保存成功，ID：{template_id}")
+    else:
+        print(f"模板保存失败：{template_id}")
+
+    # 5. 分页列出模板（仅显示摘要，解决大Prompt显示问题）
+    templates, error = template_manager.list_templates(normal_user)
+    if not error:
+        print("\n===== 模板列表（仅显示摘要） =====")
+        for t in templates:
+            print(f"模板名：{t['template_name']}，摘要：{t['prompt_summary']}")
+
+    # 6. 加载模板并处理大Prompt界面显示
+    template, error = template_manager.load_template(template_id, normal_user)
+    if not error:
+        # 生成界面展示格式（折叠+分段+高亮）
+        display_info = template_manager.get_prompt_ui_display(template.prompt_content)
+        print("\n===== 大Prompt界面展示格式 =====")
+        print(f"是否折叠：{display_info['is_folded']}")
+        print(f"折叠后内容：{display_info['folded_content'][:100]}...")
+        print(f"分段数：{len(display_info['segments'])}")
+        print(f"高亮内容预览：{display_info['highlighted_content'][:100]}...")
+
+    # 7. 集成到Text2Sql工具生成SQL
+    table_dicts = [
+        {
+            "table_name": "sales",
+            "fields": [{"field_name": "amount"}, {"field_name": "product_name"}, {"field_name": "sale_date"}]
+        }
+    ]
+    text2sql_tool = OptimizedDuckDBText2SqlTool(table_dicts=table_dicts, template_manager=template_manager)
+    sql, error = text2sql_tool.generate_sql_from_template(template_id, normal_user)
+    if not error:
+        print(f"\n===== 基于模板生成的SQL =====")
+        print(sql)
+
+    # 8. 权限测试：普通用户删除管理员模板（预期失败）
+    # 先创建管理员模板
+    admin_template = PromptTemplate(
+        template_name="管理员专属模板",
+        template_desc="仅管理员可用",
+        prompt_content="admin prompt",
+        role_scope="admin"
+    )
+    success, admin_template_id = template_manager.save_template(admin_template, admin_user)
+    # 普通用户尝试删除
+    success, error = template_manager.delete_template(admin_template_id, normal_user)
+    print(f"\n===== 权限测试结果 =====")
+    print(f"普通用户删除管理员模板：{success}，错误：{error}")
