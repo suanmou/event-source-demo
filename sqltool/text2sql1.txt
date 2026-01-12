@@ -1,0 +1,323 @@
+import os
+import json
+import jieba
+import sqlglot
+from openai import OpenAI
+from dotenv import load_dotenv
+from typing import List, Dict, Optional, Tuple
+from pydantic import BaseModel
+
+# 加载环境变量
+load_dotenv()
+
+# ------------------- 1. 结构化元数据模型（复用） -------------------
+class FieldDict(BaseModel):
+    field_name: str          # 字段物理名
+    field_alias: str         # 字段业务别名
+    field_type: str          # DuckDB字段类型
+    field_desc: str          # 字段业务含义
+    field_enum: List[str]    # 字段枚举值
+    field_constraint: str    # 字段业务约束
+
+class TableDict(BaseModel):
+    table_name: str          # 表物理名
+    table_alias: str         # 表业务别名
+    table_desc: str          # 表业务含义
+    fields: List[FieldDict]  # 字段字典列表
+    table_relation: str      # 表关联关系
+
+# ------------------- 2. 升级后Text2Sql工具类（新增自定义Prompt功能） -------------------
+class OptimizedDuckDBText2SqlTool:
+    def __init__(
+        self,
+        table_dicts: List[TableDict],
+        duckdb_dialect: str = "duckdb",
+        few_shot_examples: List[Dict] = None
+    ):
+        self.table_dicts = table_dicts
+        self.duckdb_dialect = duckdb_dialect
+        self.few_shot_examples = few_shot_examples or self._default_few_shot()
+        self.llm_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.field_name2alias = self._build_field_index()
+        self.table_name2alias = self._build_table_index()
+        # 存储最新生成的自动Prompt，供用户获取
+        self.latest_auto_prompt = ""
+
+    def _build_field_index(self) -> Dict[str, str]:
+        index = {}
+        for table in self.table_dicts:
+            for field in table.fields:
+                index[field.field_name.lower()] = field.field_alias
+                for alias in field.field_alias.split("|"):
+                    index[alias.lower()] = field.field_name
+        return index
+
+    def _build_table_index(self) -> Dict[str, str]:
+        index = {}
+        for table in self.table_dicts:
+            index[table.table_name.lower()] = table.table_alias
+            for alias in table.table_alias.split("|"):
+                index[alias.lower()] = table.table_name
+        return index
+
+    def _default_few_shot(self) -> List[Dict]:
+        return [
+            {
+                "user_query": "查询2026年1月的手机销售额",
+                "sql": "SELECT product_name, SUM(amount) AS total_sales FROM sales WHERE product_name = '手机' AND sale_date BETWEEN '2026-01-01' AND '2026-01-31' GROUP BY product_name",
+                "explanation": "筛选product_name=手机、sale_date在2026年1月，对amount求和"
+            },
+            {
+                "user_query": "统计每个产品的销售订单数",
+                "sql": "SELECT product_name, COUNT(id) AS order_count FROM sales GROUP BY product_name",
+                "explanation": "按product_name分组，对id计数得到订单数"
+            }
+        ]
+
+    def _preprocess_user_query(self, user_query: str) -> str:
+        seg_list = jieba.lcut(user_query)
+        processed_query = []
+        for word in seg_list:
+            if word.lower() in self.field_name2alias:
+                processed_query.append(self.field_name2alias[word.lower()])
+            elif word.lower() in self.table_name2alias:
+                processed_query.append(self.table_name2alias[word.lower()])
+            else:
+                processed_query.append(word)
+        processed_query_str = "".join(processed_query)
+        if "1月" in processed_query_str and "年" not in processed_query_str:
+            processed_query_str = processed_query_str.replace("1月", "2026年1月")
+        if "销售额" in processed_query_str and "SUM" not in processed_query_str:
+            processed_query_str += "（销售额指amount字段的总和）"
+        return processed_query_str
+
+    def _build_enhanced_prompt(self, user_query: str) -> str:
+        """构建增强版Prompt，并存储到latest_auto_prompt"""
+        table_dict_text = "\n\n".join([
+            f"""
+            【表信息】
+            物理表名：{table.table_name}
+            业务表名：{table.table_alias}
+            表含义：{table.table_desc}
+            关联关系：{table.table_relation}
+            字段列表：
+            {chr(10).join([f'- {f.field_name}（{f.field_alias}）：{f.field_desc}，类型：{f.field_type}，枚举值：{f.field_enum}，约束：{f.field_constraint}' for f in table.fields])}
+            """
+            for table in self.table_dicts
+        ])
+
+        few_shot_text = "\n\n".join([
+            f"""示例{i+1}：
+            用户查询：{example['user_query']}
+            生成SQL：{example['sql']}
+            匹配逻辑：{example['explanation']}
+            """
+            for i, example in enumerate(self.few_shot_examples)
+        ])
+
+        prompt = f"""
+        你是精通DuckDB SQL的业务专家，需根据以下规则生成精准匹配用户意图的只读SELECT语句：
+        【核心规则】
+        1. 语义匹配优先：严格对齐用户查询的业务意图，字段/表名使用物理名；
+        2. 语法合规：仅生成{self.duckdb_dialect}方言兼容的SQL，禁止INSERT/UPDATE/DELETE/DROP等修改语句；
+        3. 业务约束：必须遵守字段的业务约束（如金额>=0、日期格式YYYY-MM-DD）；
+        4. 枚举值匹配：筛选字段时必须使用给定的枚举值；
+        5. 只返回SQL语句，无任何额外解释、注释。
+
+        【表字典信息】
+        {table_dict_text}
+
+        【匹配示例（参考逻辑）】
+        {few_shot_text}
+
+        【用户查询（已预处理）】
+        {user_query}
+
+        【生成要求】
+        生成的SQL必须100%匹配用户查询的业务意图，字段/表名准确，聚合/筛选逻辑正确：
+        """.strip()
+        # 存储最新自动生成的Prompt
+        self.latest_auto_prompt = prompt
+        return prompt
+
+    # ========== 新增功能1：获取自动生成的Prompt ==========
+    def get_latest_auto_prompt(self) -> str:
+        """
+        获取工具最新自动生成的增强版Prompt
+        :return: 格式化的Prompt字符串
+        """
+        if not self.latest_auto_prompt:
+            return "请先调用generate_matched_sql方法生成自动Prompt，再调用此方法获取"
+        return self.latest_auto_prompt
+
+    def _validate_sql_match(self, sql: str, user_query: str) -> Tuple[bool, Optional[str]]:
+        # 复用原有的SQL匹配度+安全性校验逻辑
+        try:
+            sqlglot.parse_one(sql, dialect=self.duckdb_dialect)
+        except sqlglot.errors.ParseError as e:
+            return False, f"SQL语法错误（DuckDB不兼容）：{str(e)}"
+
+        parsed = sqlglot.parse_one(sql, dialect=self.duckdb_dialect)
+        used_tables = [t.name.lower() for t in parsed.find_all(sqlglot.exp.Table)]
+        used_fields = [c.name.lower() for c in parsed.find_all(sqlglot.exp.Column) if c.name]
+
+        valid_tables = [t.table_name.lower() for t in self.table_dicts]
+        for table in used_tables:
+            if table not in valid_tables:
+                return False, f"使用了不存在的表：{table}（有效表：{valid_tables}）"
+
+        for table in self.table_dicts:
+            if table.table_name.lower() in used_tables:
+                valid_fields = [f.field_name.lower() for f in table.fields]
+                for field in used_fields:
+                    if field not in valid_fields and field != "*":
+                        return False, f"表{table.table_name}不存在字段：{field}（有效字段：{valid_fields}）"
+
+        if "求和" in user_query or "总和" in user_query or "销售额" in user_query:
+            if "SUM(" not in sql.upper():
+                return False, "用户查询要求求和，但SQL未使用SUM聚合函数"
+        if "统计数量" in user_query or "订单数" in user_query:
+            if "COUNT(" not in sql.upper():
+                return False, "用户查询要求统计数量，但SQL未使用COUNT聚合函数"
+
+        return True, None
+
+    def _regenerate_sql(self, prompt: str, error_msg: str) -> Tuple[str, Optional[str]]:
+        retry_prompt = f"""
+        你之前生成的SQL不符合要求，错误原因：{error_msg}
+        请根据以下Prompt修正SQL，确保符合所有规则：
+        {prompt}
+        修正要求：
+        1. 解决{error_msg}的问题；
+        2. 只返回修正后的SQL语句，无其他内容。
+        """.strip()
+        try:
+            response = self.llm_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": retry_prompt}],
+                temperature=0.0,
+                max_tokens=500
+            )
+            return response.choices[0].message.content.strip(), None
+        except Exception as e:
+            return "", f"重试失败：{str(e)}"
+
+    # ========== 原有功能：自动Prompt生成SQL ==========
+    def generate_matched_sql(self, user_query: str, max_retry: int = 2) -> Tuple[str, Optional[str]]:
+        processed_query = self._preprocess_user_query(user_query)
+        prompt = self._build_enhanced_prompt(processed_query)
+        try:
+            response = self.llm_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=500
+            )
+            generated_sql = response.choices[0].message.content.strip()
+        except Exception as e:
+            return "", f"自动生成SQL失败：{str(e)}"
+
+        retry_count = 0
+        while retry_count < max_retry:
+            is_valid, error = self._validate_sql_match(generated_sql, user_query)
+            if is_valid:
+                return generated_sql, None
+            generated_sql, retry_error = self._regenerate_sql(prompt, error)
+            if retry_error:
+                return "", f"重试{retry_count+1}次失败：{retry_error}"
+            retry_count += 1
+        return "", f"多次重试失败，最后错误：{error}"
+
+    # ========== 新增功能2：使用用户自定义Prompt生成SQL ==========
+    def generate_sql_with_custom_prompt(self, custom_prompt: str, user_query: str, max_retry: int = 2) -> Tuple[str, Optional[str]]:
+        """
+        使用用户自定义的Prompt生成SQL，复用校验和重试逻辑
+        :param custom_prompt: 用户优化后的Prompt字符串
+        :param user_query: 原始用户查询（用于语义匹配校验）
+        :param max_retry: 最大重试次数
+        :return: (生成的SQL, 错误信息)
+        """
+        if not custom_prompt:
+            return "", "自定义Prompt不能为空"
+
+        # 调用LLM生成SQL
+        try:
+            response = self.llm_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": custom_prompt}],
+                temperature=0.1,
+                max_tokens=500
+            )
+            generated_sql = response.choices[0].message.content.strip()
+        except Exception as e:
+            return "", f"自定义Prompt生成SQL失败：{str(e)}"
+
+        # 复用校验和重试逻辑
+        retry_count = 0
+        while retry_count < max_retry:
+            is_valid, error = self._validate_sql_match(generated_sql, user_query)
+            if is_valid:
+                return generated_sql, None
+            # 基于用户自定义Prompt+错误信息重试
+            generated_sql, retry_error = self._regenerate_sql(custom_prompt, error)
+            if retry_error:
+                return "", f"重试{retry_count+1}次失败：{retry_error}"
+            retry_count += 1
+        return "", f"多次重试失败，最后错误：{error}"
+
+# ------------------- 3. 完整测试示例（覆盖双模式） -------------------
+if __name__ == "__main__":
+    # 1. 模拟下游提供的表字典
+    sales_field1 = FieldDict(
+        field_name="id", field_alias="订单ID", field_type="INTEGER",
+        field_desc="销售订单唯一标识", field_enum=[], field_constraint="id>0"
+    )
+    sales_field2 = FieldDict(
+        field_name="product_name", field_alias="产品名称|商品名称", field_type="VARCHAR",
+        field_desc="销售产品的名称", field_enum=["手机", "电脑", "平板"], field_constraint=""
+    )
+    sales_field3 = FieldDict(
+        field_name="sale_date", field_alias="销售日期|下单日期", field_type="DATE",
+        field_desc="订单成交日期", field_enum=[], field_constraint="日期格式为YYYY-MM-DD"
+    )
+    sales_field4 = FieldDict(
+        field_name="amount", field_alias="订单金额|销售额", field_type="FLOAT",
+        field_desc="订单成交金额（元）", field_enum=[], field_constraint="amount>=0"
+    )
+    sales_table = TableDict(
+        table_name="sales", table_alias="销售订单表|订单表",
+        table_desc="存储所有产品的销售订单信息", fields=[sales_field1, sales_field2, sales_field3, sales_field4],
+        table_relation="无关联表"
+    )
+
+    # 2. 初始化工具
+    tool = OptimizedDuckDBText2SqlTool(table_dicts=[sales_table])
+
+    # ========== 测试模式1：自动生成Prompt并获取 ==========
+    user_query = "查询1月手机的销售额总和"
+    # 生成自动SQL
+    auto_sql, auto_error = tool.generate_matched_sql(user_query)
+    if auto_error:
+        print(f"自动模式失败：{auto_error}")
+    else:
+        print("=== 自动模式生成的SQL ===")
+        print(auto_sql)
+
+    # 获取工具自动生成的Prompt
+    auto_prompt = tool.get_latest_auto_prompt()
+    print("\n=== 工具自动生成的Prompt（可复制修改） ===")
+    print(auto_prompt)
+
+    # ========== 测试模式2：用户自定义Prompt生成SQL ==========
+    # 模拟用户优化Prompt（比如新增：要求销售额保留2位小数）
+    custom_prompt = auto_prompt + "\n额外要求：计算的销售额总和需要保留2位小数，使用ROUND函数处理"
+    print("\n=== 用户优化后的自定义Prompt ===")
+    print(custom_prompt)
+
+    # 使用自定义Prompt生成SQL
+    custom_sql, custom_error = tool.generate_sql_with_custom_prompt(custom_prompt, user_query)
+    if custom_error:
+        print(f"自定义模式失败：{custom_error}")
+    else:
+        print("\n=== 自定义模式生成的SQL ===")
+        print(custom_sql)
