@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Highcharts甘特图 - 标签不重叠+固定y轴宽度+换行</title>
+    <!-- 引入Highcharts核心库 -->
+    <script src="https://code.highcharts.com/highcharts.js"></script>
+    <!-- 引入甘特图模块 -->
+    <script src="https://code.highcharts.com/gantt/highcharts-gantt.js"></script>
+    <!-- 引入导出模块（可选） -->
+    <script src="https://code.highcharts.com/modules/exporting.js"></script>
+    <style>
+        /* 容器样式，确保图表有足够宽度 */
+        #gantt-chart {
+            min-width: 800px;
+            max-width: 1200px;
+            height: 600px;
+            margin: 20px auto;
+        }
+        .btn-group {
+            text-align: center;
+            margin: 10px 0;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 0 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="btn-group">
+        <button id="addTask">动态添加任务</button>
+        <button id="reset">重置图表</button>
+    </div>
+    <div id="gantt-chart"></div>
+
+    <script>
+        // 初始化甘特图
+        let chart = Highcharts.ganttChart('gantt-chart', {
+            chart: {
+                type: 'gantt',
+                // 配合y轴宽度，调整左侧边距（避免y轴被挤压）
+                marginLeft: 220,
+                marginRight: 50
+            },
+            title: {
+                text: '项目进度甘特图'
+            },
+            xAxis: {
+                type: 'datetime',
+                tickInterval: 7 * 24 * 3600 * 1000, // 周为单位
+                labels: {
+                    format: '{value:%Y-%m-%d}'
+                }
+            },
+            yAxis: {
+                type: 'category',
+                // 核心：固定y轴宽度（关键配置1）
+                width: 200,
+                // 防止标签溢出容器
+                overflow: 'none',
+                labels: {
+                    // 核心：标签样式配置（宽度固定+换行）
+                    style: {
+                        width: '200px', // 与y轴宽度一致
+                        whiteSpace: 'normal', // 允许换行（关键配置2）
+                        textOverflow: 'none', // 不显示省略号，优先换行
+                        wordWrap: 'break-word' // 强制长单词换行
+                    },
+                    // 核心：禁止标签重叠（关键配置3）
+                    allowOverlap: false,
+                    // 数据极多时，隔行显示标签（可根据数据量动态调整）
+                    step: 1,
+                    // 不裁剪标签
+                    crop: false
+                },
+                // y轴分类的间距（避免拥挤）
+                minPadding: 0.05,
+                maxPadding: 0.05
+            },
+            tooltip: {
+                formatter: function() {
+                    return `<b>${this.y}</b><br/>
+                            开始：${Highcharts.dateFormat('%Y-%m-%d', this.point.start)}<br/>
+                            结束：${Highcharts.dateFormat('%Y-%m-%d', this.point.end)}`;
+                }
+            },
+            plotOptions: {
+                gantt: {
+                    // 任务条样式
+                    borderRadius: 5,
+                    // 动态数据更新时的动画
+                    animation: true,
+                    dataLabels: {
+                        enabled: true,
+                        // 任务条上的标签不重叠
+                        allowOverlap: false,
+                        // 任务条标签超出时换行
+                        style: {
+                            whiteSpace: 'normal',
+                            width: '100px'
+                        }
+                    }
+                }
+            },
+            // 初始数据
+            series: [{
+                name: '项目任务',
+                data: [
+                    {
+                        name: '需求分析（超长名称测试：用户需求调研与功能拆解）',
+                        start: Date.UTC(2026, 0, 1),
+                        end: Date.UTC(2026, 0, 10),
+                        y: '需求分析（超长名称测试：用户需求调研与功能拆解）'
+                    },
+                    {
+                        name: 'UI设计',
+                        start: Date.UTC(2026, 0, 8),
+                        end: Date.UTC(2026, 0, 18),
+                        y: 'UI设计'
+                    },
+                    {
+                        name: '前端开发',
+                        start: Date.UTC(2026, 0, 15),
+                        end: Date.UTC(2026, 1, 5),
+                        y: '前端开发'
+                    }
+                ]
+            }]
+        });
+
+        // 动态添加任务（演示动态效果）
+        document.getElementById('addTask').addEventListener('click', function() {
+            const taskIndex = chart.series[0].data.length + 1;
+            // 构造超长名称的任务（测试换行）
+            const taskName = `开发任务${taskIndex}（超长名称测试：模块${taskIndex}的详细开发与联调测试，包含多个子任务）`;
+            chart.series[0].addPoint({
+                name: taskName,
+                start: Date.UTC(2026, 1, taskIndex),
+                end: Date.UTC(2026, 1, taskIndex + 7),
+                y: taskName
+            });
+            // 数据超过10条时，自动调整step为2（隔行显示，避免重叠）
+            if (chart.series[0].data.length > 10) {
+                chart.yAxis[0].update({
+                    labels: {
+                        step: 2
+                    }
+                });
+            }
+        });
+
+        // 重置图表
+        document.getElementById('reset').addEventListener('click', function() {
+            chart.series[0].setData([
+                {
+                    name: '需求分析（超长名称测试：用户需求调研与功能拆解）',
+                    start: Date.UTC(2026, 0, 1),
+                    end: Date.UTC(2026, 0, 10),
+                    y: '需求分析（超长名称测试：用户需求调研与功能拆解）'
+                },
+                {
+                    name: 'UI设计',
+                    start: Date.UTC(2026, 0, 8),
+                    end: Date.UTC(2026, 0, 18),
+                    y: 'UI设计'
+                },
+                {
+                    name: '前端开发',
+                    start: Date.UTC(2026, 0, 15),
+                    end: Date.UTC(2026, 1, 5),
+                    y: '前端开发'
+                }
+            ]);
+            // 重置step为1
+            chart.yAxis[0].update({
+                labels: {
+                    step: 1
+                }
+            });
+        });
+    </script>
+</body>
+</html>
