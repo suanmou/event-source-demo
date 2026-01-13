@@ -2,30 +2,14 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>Highcharts甘特图 - 标签不重叠+固定y轴宽度+换行</title>
-    <!-- 引入Highcharts核心库 -->
+    <title>Highcharts甘特图 - 全元素防重叠</title>
     <script src="https://code.highcharts.com/highcharts.js"></script>
-    <!-- 引入甘特图模块 -->
     <script src="https://code.highcharts.com/gantt/highcharts-gantt.js"></script>
-    <!-- 引入导出模块（可选） -->
     <script src="https://code.highcharts.com/modules/exporting.js"></script>
     <style>
-        /* 容器样式，确保图表有足够宽度 */
-        #gantt-chart {
-            min-width: 800px;
-            max-width: 1200px;
-            height: 600px;
-            margin: 20px auto;
-        }
-        .btn-group {
-            text-align: center;
-            margin: 10px 0;
-        }
-        button {
-            padding: 8px 16px;
-            margin: 0 5px;
-            cursor: pointer;
-        }
+        #gantt-chart { min-width: 800px; max-width: 1200px; height: 600px; margin: 20px auto; }
+        .btn-group { text-align: center; margin: 10px 0; }
+        button { padding: 8px 16px; margin: 0 5px; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -36,149 +20,108 @@
     <div id="gantt-chart"></div>
 
     <script>
-        // 初始化甘特图
         let chart = Highcharts.ganttChart('gantt-chart', {
-            chart: {
-                type: 'gantt',
-                // 配合y轴宽度，调整左侧边距（避免y轴被挤压）
-                marginLeft: 220,
-                marginRight: 50
-            },
-            title: {
-                text: '项目进度甘特图'
-            },
+            chart: { type: 'gantt', marginLeft: 220, marginRight: 50 },
+            title: { text: '项目进度甘特图（全元素防重叠）' },
             xAxis: {
                 type: 'datetime',
-                tickInterval: 7 * 24 * 3600 * 1000, // 周为单位
+                tickInterval: 7 * 24 * 3600 * 1000, // 按周显示刻度，减少密度
                 labels: {
-                    format: '{value:%Y-%m-%d}'
-                }
+                    format: '{value:%Y-%m-%d}',
+                    rotation: -45, // X轴标签旋转，避免重叠
+                    step: 1, // 数据极多时设为2，隔行显示
+                    style: { whiteSpace: 'normal' }, // 允许X轴标签换行
+                    allowOverlap: false // 禁止X轴标签重叠
+                },
+                gridLineWidth: 0.5, // 弱化网格线，减少视觉重叠
+                gridLineDashStyle: 'Dash' // 网格线设为虚线
             },
             yAxis: {
                 type: 'category',
-                // 核心：固定y轴宽度（关键配置1）
                 width: 200,
-                // 防止标签溢出容器
                 overflow: 'none',
                 labels: {
-                    // 核心：标签样式配置（宽度固定+换行）
-                    style: {
-                        width: '200px', // 与y轴宽度一致
-                        whiteSpace: 'normal', // 允许换行（关键配置2）
-                        textOverflow: 'none', // 不显示省略号，优先换行
-                        wordWrap: 'break-word' // 强制长单词换行
-                    },
-                    // 核心：禁止标签重叠（关键配置3）
+                    style: { width: '200px', whiteSpace: 'normal', wordWrap: 'break-word' },
                     allowOverlap: false,
-                    // 数据极多时，隔行显示标签（可根据数据量动态调整）
                     step: 1,
-                    // 不裁剪标签
                     crop: false
                 },
-                // y轴分类的间距（避免拥挤）
-                minPadding: 0.05,
-                maxPadding: 0.05
+                minPadding: 0.08, // 增加y轴分类间距，避免任务条拥挤
+                maxPadding: 0.08,
+                gridLineWidth: 0 // 隐藏Y轴网格线
             },
             tooltip: {
                 formatter: function() {
                     return `<b>${this.y}</b><br/>
                             开始：${Highcharts.dateFormat('%Y-%m-%d', this.point.start)}<br/>
                             结束：${Highcharts.dateFormat('%Y-%m-%d', this.point.end)}`;
+                },
+                delayForDisplay: 300, // 延迟显示，避免快速悬浮导致重叠
+                shared: false, // 一次只显示一个提示框
+                positioner: function(labelWidth, labelHeight, point) {
+                    // 自定义提示框位置，避开图表边缘
+                    return {
+                        x: Math.max(220, point.plotX + 10), // 不超过y轴右侧
+                        y: Math.max(10, point.plotY - labelHeight / 2) // 不超过图表顶部
+                    };
                 }
             },
             plotOptions: {
                 gantt: {
-                    // 任务条样式
                     borderRadius: 5,
-                    // 动态数据更新时的动画
                     animation: true,
+                    pointPadding: 2, // 任务条上下间距
+                    groupPadding: 5, // 分类之间的间距
+                    allowOverlapX: false, // 禁止任务条横向重叠
                     dataLabels: {
                         enabled: true,
-                        // 任务条上的标签不重叠
-                        allowOverlap: false,
-                        // 任务条标签超出时换行
+                        allowOverlap: false, // 禁止任务条标签重叠
                         style: {
                             whiteSpace: 'normal',
-                            width: '100px'
-                        }
+                            width: '100px',
+                            textOverflow: 'ellipsis' // 超出宽度显示省略号
+                        },
+                        crop: true, // 标签过小时自动裁剪
+                        overflow: 'none'
                     }
                 }
             },
-            // 初始数据
             series: [{
                 name: '项目任务',
                 data: [
-                    {
-                        name: '需求分析（超长名称测试：用户需求调研与功能拆解）',
-                        start: Date.UTC(2026, 0, 1),
-                        end: Date.UTC(2026, 0, 10),
-                        y: '需求分析（超长名称测试：用户需求调研与功能拆解）'
-                    },
-                    {
-                        name: 'UI设计',
-                        start: Date.UTC(2026, 0, 8),
-                        end: Date.UTC(2026, 0, 18),
-                        y: 'UI设计'
-                    },
-                    {
-                        name: '前端开发',
-                        start: Date.UTC(2026, 0, 15),
-                        end: Date.UTC(2026, 1, 5),
-                        y: '前端开发'
-                    }
+                    { name: '需求分析（超长名称测试）', start: Date.UTC(2026, 0, 1), end: Date.UTC(2026, 0, 10), y: '需求分析（超长名称测试）' },
+                    { name: 'UI设计', start: Date.UTC(2026, 0, 8), end: Date.UTC(2026, 0, 18), y: 'UI设计' },
+                    { name: '前端开发', start: Date.UTC(2026, 0, 15), end: Date.UTC(2026, 1, 5), y: '前端开发' }
                 ]
             }]
         });
 
-        // 动态添加任务（演示动态效果）
+        // 动态添加任务（模拟密集数据）
         document.getElementById('addTask').addEventListener('click', function() {
             const taskIndex = chart.series[0].data.length + 1;
-            // 构造超长名称的任务（测试换行）
-            const taskName = `开发任务${taskIndex}（超长名称测试：模块${taskIndex}的详细开发与联调测试，包含多个子任务）`;
+            const taskName = `开发任务${taskIndex}（超长名称测试：模块${taskIndex}的详细开发与联调）`;
+            // 故意让新任务与旧任务时间重叠，测试防重叠效果
             chart.series[0].addPoint({
                 name: taskName,
-                start: Date.UTC(2026, 1, taskIndex),
-                end: Date.UTC(2026, 1, taskIndex + 7),
-                y: taskName
+                start: Date.UTC(2026, 1, taskIndex - 2), // 时间重叠
+                end: Date.UTC(2026, 1, taskIndex + 3),
+                y: taskIndex > 8 ? `分类${Math.floor(taskIndex/3)}` : taskName // 部分任务归为同一分类，测试堆叠
             });
-            // 数据超过10条时，自动调整step为2（隔行显示，避免重叠）
-            if (chart.series[0].data.length > 10) {
-                chart.yAxis[0].update({
-                    labels: {
-                        step: 2
-                    }
-                });
+            // 数据超过8条时，调整X/Y轴标签step
+            if (chart.series[0].data.length > 8) {
+                chart.yAxis[0].update({ labels: { step: 2 } });
+                chart.xAxis[0].update({ labels: { step: 2 } });
             }
         });
 
-        // 重置图表
         document.getElementById('reset').addEventListener('click', function() {
             chart.series[0].setData([
-                {
-                    name: '需求分析（超长名称测试：用户需求调研与功能拆解）',
-                    start: Date.UTC(2026, 0, 1),
-                    end: Date.UTC(2026, 0, 10),
-                    y: '需求分析（超长名称测试：用户需求调研与功能拆解）'
-                },
-                {
-                    name: 'UI设计',
-                    start: Date.UTC(2026, 0, 8),
-                    end: Date.UTC(2026, 0, 18),
-                    y: 'UI设计'
-                },
-                {
-                    name: '前端开发',
-                    start: Date.UTC(2026, 0, 15),
-                    end: Date.UTC(2026, 1, 5),
-                    y: '前端开发'
-                }
+                { name: '需求分析（超长名称测试）', start: Date.UTC(2026, 0, 1), end: Date.UTC(2026, 0, 10), y: '需求分析（超长名称测试）' },
+                { name: 'UI设计', start: Date.UTC(2026, 0, 8), end: Date.UTC(2026, 0, 18), y: 'UI设计' },
+                { name: '前端开发', start: Date.UTC(2026, 0, 15), end: Date.UTC(2026, 1, 5), y: '前端开发' }
             ]);
-            // 重置step为1
-            chart.yAxis[0].update({
-                labels: {
-                    step: 1
-                }
-            });
+            chart.yAxis[0].update({ labels: { step: 1 } });
+            chart.xAxis[0].update({ labels: { step: 1 } });
         });
     </script>
 </body>
