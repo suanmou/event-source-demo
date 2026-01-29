@@ -1,0 +1,728 @@
+<template>
+  <div class="hive-select-compare-container">
+    <el-card shadow="hover" class="compare-card">
+      <div slot="header" class="card-header">
+        <span>Hive查询语句（SELECT）相似度对比工具</span>
+        <el-tag type="info" size="mini" style="margin-left:10px;">支持语句+结果集双维度对比</el-tag>
+      </div>
+
+      <!-- 1. 输入区域 -->
+      <div class="input-area">
+        <div class="input-item">
+          <el-form-label label="Hive查询语句1" class="input-label" />
+          <el-input
+            type="textarea"
+            v-model="sql1"
+            placeholder="请输入Hive SELECT查询语句（支持CTE/分区/窗口函数/UDTF）"
+            rows="6"
+            class="sql-input"
+          />
+          <el-alert
+            v-if="sql1Error"
+            title="解析失败"
+            type="error"
+            description="仅支持Hive SELECT类查询，请检查语法/语句类型"
+            show-icon
+            class="sql-error-alert"
+          />
+          <!-- 执行SQL按钮 + 执行状态 -->
+          <div class="sql-exec-btn" style="margin-top:8px;">
+            <el-button 
+              type="primary" 
+              icon="el-icon-run" 
+              size="mini" 
+              @click="executeSql(1)"
+              :loading="execLoading[1]"
+              :disabled="!sql1 || sql1Error"
+            >
+              执行SQL1
+            </el-button>
+            <el-tag v-if="sql1ExecResult?.success" type="success" size="mini">执行成功（{{ sql1ExecResult.data.rowCount }}行）</el-tag>
+            <el-tag v-if="sql1ExecResult?.success === false" type="danger" size="mini">执行失败</el-tag>
+          </div>
+        </div>
+        <div class="input-item">
+          <el-form-label label="Hive查询语句2" class="input-label" />
+          <el-input
+            type="textarea"
+            v-model="sql2"
+            placeholder="请输入Hive SELECT查询语句（支持CTE/分区/窗口函数/UDTF）"
+            rows="6"
+            class="sql-input"
+          />
+          <el-alert
+            v-if="sql2Error"
+            title="解析失败"
+            type="error"
+            description="仅支持Hive SELECT类查询，请检查语法/语句类型"
+            show-icon
+            class="sql-error-alert"
+          />
+          <!-- 执行SQL按钮 + 执行状态 -->
+          <div class="sql-exec-btn" style="margin-top:8px;">
+            <el-button 
+              type="primary" 
+              icon="el-icon-run" 
+              size="mini" 
+              @click="executeSql(2)"
+              :loading="execLoading[2]"
+              :disabled="!sql2 || sql2Error"
+            >
+              执行SQL2
+            </el-button>
+            <el-tag v-if="sql2ExecResult?.success" type="success" size="mini">执行成功（{{ sql2ExecResult.data.rowCount }}行）</el-tag>
+            <el-tag v-if="sql2ExecResult?.success === false" type="danger" size="mini">执行失败</el-tag>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 操作按钮 -->
+      <div class="btn-area">
+        <el-button type="primary" @click="compareSql" icon="el-icon-search" :loading="comparing">
+          对比语句相似度
+        </el-button>
+        <el-button 
+          type="warning" 
+          @click="compareResultData" 
+          icon="el-icon-data-analysis" 
+          :loading="dataComparing"
+          :disabled="!sql1ExecResult?.success || !sql2ExecResult?.success"
+        >
+          对比结果集相似度
+        </el-button>
+        <el-button @click="resetForm" icon="el-icon-refresh">清空内容</el-button>
+        <el-button type="text" @click="toggleAstView" icon="el-icon-s-data">
+          {{ showAstView ? '隐藏AST' : '查看AST结构' }}
+        </el-button>
+      </div>
+
+      <!-- 3. AST结构预览 -->
+      <div v-if="showAstView && showResult" class="ast-view-area">
+        <el-form-label label="标准化AST结构（SELECT专属）" class="ast-label" />
+        <div class="ast-content">
+          <div class="ast-item"><span>查询1 AST：</span><pre>{{ ast1Str }}</pre></div>
+          <div class="ast-item"><span>查询2 AST：</span><pre>{{ ast2Str }}</pre></div>
+        </div>
+      </div>
+
+      <!-- 4. 结果集展示（执行成功后） -->
+      <div v-if="sql1ExecResult?.success || sql2ExecResult?.success" class="result-data-area">
+        <el-form-label label="SQL执行结果集" class="diff-label" />
+        <div class="result-data-content">
+          <div class="result-data-item">
+            <span class="result-data-title">查询语句1结果：</span>
+            <el-table 
+              :data="sql1ExecResult?.success ? sql1ExecResult.data.rows : []"
+              border 
+              size="mini" 
+              max-height="200"
+              v-loading="execLoading[1]"
+            >
+              <el-table-column 
+                v-for="(col, idx) in sql1ExecResult?.data.columns || []" 
+                :key="idx" 
+                :label="col"
+              >
+                <template slot-scope="scope">{{ scope.row[idx] }}</template>
+              </el-table-column>
+            </el-table>
+            <el-alert 
+              v-if="sql1ExecResult?.success === false" 
+              title="执行失败" 
+              type="error" 
+              :description="sql1ExecResult.errorMsg"
+              show-icon 
+              size="mini"
+            />
+          </div>
+          <div class="result-data-item">
+            <span class="result-data-title">查询语句2结果：</span>
+            <el-table 
+              :data="sql2ExecResult?.success ? sql2ExecResult.data.rows : []"
+              border 
+              size="mini" 
+              max-height="200"
+              v-loading="execLoading[2]"
+            >
+              <el-table-column 
+                v-for="(col, idx) in sql2ExecResult?.data.columns || []" 
+                :key="idx" 
+                :label="col"
+              >
+                <template slot-scope="scope">{{ scope.row[idx] }}</template>
+              </el-table-column>
+            </el-alert>
+              v-if="sql2ExecResult?.success === false" 
+              title="执行失败" 
+              type="error" 
+              :description="sql2ExecResult.errorMsg"
+              show-icon 
+              size="mini"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. 对比结果展示 -->
+      <div v-if="showResult" class="result-area">
+        <!-- 5.1 综合得分（语句+结果集） -->
+        <div class="similarity-score">
+          <span>最终综合相似度：</span>
+          <el-tag :type="finalTotalSimilarity >=0.8?'success':finalTotalSimilarity>=0.5?'warning':'danger'" size="large">
+            {{ (finalTotalSimilarity * 100).toFixed(2) }}%
+          </el-tag>
+          <el-popover trigger="hover" placement="top" width="400">
+            <div class="similarity-detail">
+              <p>▷ 语句综合相似度：{{ (finalSimilarity * 100).toFixed(2) }}%（权重70%）</p>
+              <p>  - 文本基础相似度：{{ (textSimilarity*100).toFixed(2) }}%（权重20%）</p>
+              <p>  - AST结构相似度：{{ (astStructSimilarity*100).toFixed(2) }}%（权重50%）</p>
+              <p>  - 核心语义相似度：{{ (semanticSimilarity*100).toFixed(2) }}%（权重30%）</p>
+              <p>▷ 结果集相似度：{{ (resultDataSimilarity * 100).toFixed(2) }}%（权重30%）</p>
+              <p v-if="resultDataSimilarity > 0">
+                - 列结构相似度：{{ (colStructSimilarity*100).toFixed(2) }}%（权重40%）<br>
+                - 行数据匹配度：{{ (rowDataSimilarity*100).toFixed(2) }}%（权重40%）<br>
+                - 数据分布相似度：{{ (dataDistSimilarity*100).toFixed(2) }}%（权重20%）
+              </p>
+            </div>
+            <el-button slot="reference" type="text" icon="el-icon-info">得分明细</el-button>
+          </el-popover>
+        </div>
+
+        <!-- 5.2 文本差异高亮 -->
+        <div class="diff-area">
+          <el-form-label label="语句文本差异（红色=删除 | 绿色=新增）" class="diff-label" />
+          <div class="diff-content" v-html="diffHtml" />
+        </div>
+
+        <!-- 5.3 语义差异表格 -->
+        <div class="semantic-diff-area" style="margin-top:20px;">
+          <el-form-label label="查询语句核心语义差异" class="diff-label" />
+          <el-table :data="semanticDiffList" border size="small" max-height="200">
+            <el-table-column label="对比维度" prop="dimension" width="180" />
+            <el-table-column label="查询语句1" prop="sql1Content" />
+            <el-table-column label="查询语句2" prop="sql2Content" />
+            <el-table-column label="匹配结果" prop="matchResult">
+              <template slot-scope="scope">
+                <el-tag :type="scope.row.matchResult==='匹配'?'success':'danger'">
+                  {{ scope.row.matchResult }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- 5.4 结果集差异表格（仅对比后显示） -->
+        <div v-if="resultDataSimilarity >=0" class="semantic-diff-area" style="margin-top:20px;">
+          <el-form-label label="结果集核心差异" class="diff-label" />
+          <el-table :data="resultDataDiffList" border size="small" max-height="200">
+            <el-table-column label="对比维度" prop="dimension" width="180" />
+            <el-table-column label="查询语句1结果" prop="sql1Content" />
+            <el-table-column label="查询语句2结果" prop="sql2Content" />
+            <el-table-column label="匹配结果" prop="matchResult">
+              <template slot-scope="scope">
+                <el-tag :type="scope.row.matchResult==='匹配'?'success':'danger'">
+                  {{ scope.row.matchResult }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+    </el-card>
+  </div>
+</template>
+
+<script>
+import diffMatchPatch from 'diff-match-patch';
+import _ from 'lodash';
+import { Parser } from 'node-sql-parser';
+import stringify from 'fast-json-stable-stringify';
+// 假设你用axios请求后端接口，需提前安装：npm install axios --save
+import axios from 'axios';
+
+export default {
+  name: 'HiveSelectSimilarityCompare',
+  data() {
+    return {
+      // 1. 输入&解析相关
+      sql1: '',
+      sql2: '',
+      sql1Error: false,
+      sql2Error: false,
+      ast1: null,
+      ast2: null,
+      ast1Str: '',
+      ast2Str: '',
+      showAstView: false,
+
+      // 2. 语句相似度相关
+      textSimilarity: 0,
+      astStructSimilarity: 0,
+      semanticSimilarity: 0,
+      finalSimilarity: 0, // 语句综合相似度
+      diffHtml: '',
+      semanticDiffList: [],
+      showResult: false,
+      comparing: false,
+
+      // 3. 执行SQL相关
+      execLoading: { 1: false, 2: false }, // 执行SQL的loading
+      sql1ExecResult: null, // SQL1执行结果
+      sql2ExecResult: null, // SQL2执行结果
+
+      // 4. 结果集相似度相关
+      dataComparing: false,
+      resultDataSimilarity: -1, // 结果集整体相似度（-1表示未对比）
+      colStructSimilarity: 0, // 列结构相似度
+      rowDataSimilarity: 0, // 行数据匹配度
+      dataDistSimilarity: 0, // 数据分布相似度
+      resultDataDiffList: [], // 结果集差异列表
+      finalTotalSimilarity: 0, // 最终综合得分（语句70% + 结果集30%）
+
+      // 5. Hive解析器
+      hiveParser: new Parser({ dialect: 'hive' })
+    };
+  },
+  methods: {
+    /**
+     * 1. 标准化Hive SELECT语句（原有逻辑）
+     */
+    sqlNormalize(sql) {
+      if (!sql) return '';
+      return sql.trim()
+        .replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/#.*$/gm, '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/;$/, '')
+        .replace(/\s+as\s+\w+/g, '').replace(/\s+\w+\s+from/g, ' from');
+    },
+
+    /**
+     * 2. 解析SELECT语句为AST（原有逻辑+强校验）
+     */
+    parseSelectToAst(sql) {
+      if (!sql) return null;
+      try {
+        const ast = this.hiveParser.parse(sql);
+        if (ast?.type !== 'select' || Array.isArray(ast)) return null;
+        return this.normalizeAst(ast);
+      } catch (e) {
+        console.error('Hive SELECT解析失败：', e);
+        return null;
+      }
+    },
+
+    /**
+     * 3. AST标准化（原有逻辑）
+     */
+    normalizeAst(ast) {
+      if (!ast) return null;
+      const sortNode = (node) => {
+        if (_.isArray(node)) {
+          return node.map(sortNode).sort((a, b) => {
+            if (a.name && b.name) return a.name.localeCompare(b.name);
+            return stringify(a).localeCompare(stringify(b));
+          });
+        }
+        if (_.isObject(node) && !_.isFunction(node)) {
+          const sortedObj = {};
+          Object.keys(node).sort().forEach(key => {
+            if (['start', 'end', 'loc', 'range'].includes(key)) return;
+            sortedObj[key] = sortNode(node[key]);
+          });
+          return sortedObj;
+        }
+        return node;
+      };
+      return sortNode(ast);
+    },
+
+    /**
+     * 4. 计算文本基础相似度（原有逻辑）
+     */
+    calculateTextSimilarity(a, b) {
+      if (!a && !b) return 1;
+      if (!a || !b) return 0;
+      const matrix = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+      for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+      for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+      for (let i = 1; i <= a.length; i++) {
+        for (let j = 1; j <= b.length; j++) {
+          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+          matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+        }
+      }
+      return 1 - (matrix[a.length][b.length] / Math.max(a.length, b.length));
+    },
+
+    /**
+     * 5. 计算AST结构相似度（原有逻辑）
+     */
+    calculateAstStructSimilarity(ast1, ast2) {
+      if (!ast1 && !ast2) return 1;
+      if (!ast1 || !ast2) return 0;
+      const astStr1 = stringify(ast1);
+      const astStr2 = stringify(ast2);
+      return this.calculateTextSimilarity(astStr1, astStr2);
+    },
+
+    /**
+     * 6. 计算语句核心语义相似度（原有逻辑）
+     */
+    calculateSemanticSimilarity(ast1, ast2) {
+      this.semanticDiffList = [];
+      if (!ast1 && !ast2) return 1;
+      if (!ast1 || !ast2) {
+        this.semanticDiffList.push({
+          dimension: '查询语句有效性',
+          sql1Content: ast1 ? '有效Hive SELECT' : '无效/非查询语句',
+          sql2Content: ast2 ? '有效Hive SELECT' : '无效/非查询语句',
+          matchResult: '不匹配'
+        });
+        return 0;
+      }
+
+      const extractSelectSemantic = (ast) => {
+        const sem = {
+          type: ast.type || '未知',
+          tables: [], columns: [], where: [], cte: [], partition: [], lateralView: []
+        };
+        if (ast.from && ast.from.length) {
+          sem.tables = ast.from.map(item => item.table?.name || item.table?.value || '').filter(Boolean);
+        }
+        if (ast.columns && ast.columns.length) {
+          sem.columns = ast.columns.map(col => col.expr?.name || col.expr?.value || '*').filter(Boolean);
+        }
+        if (ast.where) sem.where = [stringify(ast.where)];
+        if (ast.with && ast.with.length) {
+          sem.cte = ast.with.map(c => `${c.name}:${stringify(c.expr)}`);
+        }
+        if (ast.partitionBy && ast.partitionBy.length) {
+          sem.partition = ast.partitionBy.map(p => p.name || p.value);
+        }
+        if (ast.lateralViews && ast.lateralViews.length) {
+          sem.lateralView = ast.lateralViews.map(l => stringify(l));
+        }
+        return sem;
+      };
+
+      const s1 = extractSelectSemantic(ast1);
+      const s2 = extractSelectSemantic(ast2);
+      const dimensions = [
+        { name: 'SQL类型', get: s => s.type, compare: (a, b) => a === b },
+        { name: '关联表名', get: s => s.tables.sort().join(',') || '无', compare: (a, b) => a === b },
+        { name: '查询列名', get: s => s.columns.sort().join(',') || '无', compare: (a, b) => a === b },
+        { name: 'WHERE过滤条件', get: s => s.where.join('') || '无', compare: (a, b) => a === b },
+        { name: 'CTE公共表表达式', get: s => s.cte.sort().join(';') || '无', compare: (a, b) => a === b },
+        { name: '分区查询条件', get: s => s.partition.sort().join(',') || '无', compare: (a, b) => a === b },
+        { name: 'LATERAL VIEW(UDTF)', get: s => s.lateralView.join(';') || '无', compare: (a, b) => a === b }
+      ];
+
+      let matchCount = 0;
+      dimensions.forEach(dim => {
+        const v1 = dim.get(s1);
+        const v2 = dim.get(s2);
+        const isMatch = dim.compare(v1, v2);
+        if (isMatch) matchCount++;
+        this.semanticDiffList.push({
+          dimension: dim.name,
+          sql1Content: v1,
+          sql2Content: v2,
+          matchResult: isMatch ? '匹配' : '不匹配'
+        });
+      });
+      return matchCount / dimensions.length;
+    },
+
+    /**
+     * 7. 生成文本差异高亮（原有逻辑）
+     */
+    generateDiffHtml(sql1, sql2) {
+      const dmp = new diffMatchPatch();
+      const diffs = dmp.diff_main(sql1, sql2);
+      dmp.diff_cleanupSemantic(diffs);
+      let html = '';
+      diffs.forEach(([type, text]) => {
+        switch (type) {
+          case 0: html += `<span class="diff-same">${_.escape(text)}</span>`; break;
+          case 1: html += `<span class="diff-added">${_.escape(text)}</span>`; break;
+          case -1: html += `<span class="diff-deleted">${_.escape(text)}</span>`; break;
+        }
+      });
+      return html;
+    },
+
+    /**
+     * 8. 新增：执行Hive SQL（调用后端接口）
+     * @param {number} sqlType - 1=SQL1，2=SQL2
+     */
+    async executeSql(sqlType) {
+      const sql = sqlType === 1 ? this.sql1 : this.sql2;
+      this.execLoading[sqlType] = true;
+      try {
+        // 调用后端执行Hive SQL的接口（请替换为你的实际接口地址）
+        const res = await axios.post('/api/hive/execute', { sql });
+        if (res.data?.success) {
+          // 格式化结果集（确保rows是数组，columns是数组）
+          const result = {
+            success: true,
+            data: {
+              columns: res.data.data.columns || [],
+              rows: res.data.data.rows || [],
+              rowCount: res.data.data.rows?.length || 0
+            },
+            errorMsg: ''
+          };
+          if (sqlType === 1) {
+            this.sql1ExecResult = result;
+          } else {
+            this.sql2ExecResult = result;
+          }
+          this.$message.success(`SQL${sqlType}执行成功，返回${result.data.rowCount}行数据`);
+        } else {
+          const errorResult = {
+            success: false,
+            data: {},
+            errorMsg: res.data?.errorMsg || '执行失败，未知错误'
+          };
+          if (sqlType === 1) {
+            this.sql1ExecResult = errorResult;
+          } else {
+            this.sql2ExecResult = errorResult;
+          }
+          this.$message.error(`SQL${sqlType}执行失败：${errorResult.errorMsg}`);
+        }
+      } catch (e) {
+        const errorResult = {
+          success: false,
+          data: {},
+          errorMsg: `接口调用失败：${e.message}`
+        };
+        if (sqlType === 1) {
+          this.sql1ExecResult = errorResult;
+        } else {
+          this.sql2ExecResult = errorResult;
+        }
+        this.$message.error(`SQL${sqlType}执行失败：${errorResult.errorMsg}`);
+      } finally {
+        this.execLoading[sqlType] = false;
+      }
+    },
+
+    /**
+     * 9. 新增：计算结果集相似度
+     */
+    calculateResultDataSimilarity() {
+      this.resultDataDiffList = [];
+      const data1 = this.sql1ExecResult.data;
+      const data2 = this.sql2ExecResult.data;
+
+      // 9.1 列结构相似度（列名+列数）
+      const cols1 = data1.columns.map(c => c.toLowerCase().trim()).sort();
+      const cols2 = data2.columns.map(c => c.toLowerCase().trim()).sort();
+      const colStr1 = cols1.join(',');
+      const colStr2 = cols2.join(',');
+      this.colStructSimilarity = this.calculateTextSimilarity(colStr1, colStr2);
+      const colMatch = cols1.length === cols2.length && colStr1 === colStr2;
+
+      // 9.2 行数据匹配度（按全行数据匹配）
+      // 先将行转为字符串，方便对比
+      const rows1Str = data1.rows.map(row => row.join('|')).sort();
+      const rows2Str = data2.rows.map(row => row.join('|')).sort();
+      // 计算交集数量
+      const intersection = rows1Str.filter(r => rows2Str.includes(r)).length;
+      const maxRowCount = Math.max(rows1Str.length, rows2Str.length);
+      this.rowDataSimilarity = maxRowCount === 0 ? 1 : intersection / maxRowCount;
+      const rowMatch = rows1Str.length === rows2Str.length && intersection === rows1Str.length;
+
+      // 9.3 数据分布相似度（总行数差异）
+      const rowCount1 = data1.rowCount;
+      const rowCount2 = data2.rowCount;
+      this.dataDistSimilarity = rowCount1 === 0 && rowCount2 === 0 
+        ? 1 
+        : 1 - Math.abs(rowCount1 - rowCount2) / Math.max(rowCount1, rowCount2);
+      const distMatch = rowCount1 === rowCount2;
+
+      // 9.4 结果集整体相似度（加权）
+      this.resultDataSimilarity = (
+        this.colStructSimilarity * 0.4 +
+        this.rowDataSimilarity * 0.4 +
+        this.dataDistSimilarity * 0.2
+      );
+
+      // 9.5 生成结果集差异列表
+      this.resultDataDiffList = [
+        {
+          dimension: '列结构（列名+列数）',
+          sql1Content: `${cols1.length}列：${colStr1 || '无'}`,
+          sql2Content: `${cols2.length}列：${colStr2 || '无'}`,
+          matchResult: colMatch ? '匹配' : '不匹配'
+        },
+        {
+          dimension: '行数据匹配数',
+          sql1Content: `${data1.rowCount}行（唯一行：${rows1Str.length}）`,
+          sql2Content: `${data2.rowCount}行（唯一行：${rows2Str.length}）`,
+          matchResult: rowMatch ? '匹配' : `仅匹配${intersection}行`
+        },
+        {
+          dimension: '数据分布（总行数）',
+          sql1Content: `${rowCount1}行`,
+          sql2Content: `${rowCount2}行`,
+          matchResult: distMatch ? '匹配' : '不匹配'
+        },
+        {
+          dimension: '结果集整体相似度',
+          sql1Content: '-',
+          sql2Content: '-',
+          matchResult: this.resultDataSimilarity >= 0.8 ? '匹配' : '不匹配'
+        }
+      ];
+
+      // 9.6 计算最终综合得分（语句70% + 结果集30%）
+      this.finalTotalSimilarity = this.finalSimilarity * 0.7 + this.resultDataSimilarity * 0.3;
+    },
+
+    /**
+     * 10. 对比语句相似度（原有逻辑+整合最终得分）
+     */
+    async compareSql() {
+      if (!this.sql1 && !this.sql2) return this.$message.warning('请至少输入一个Hive SELECT查询语句！');
+      this.comparing = true;
+      this.showResult = false;
+      this.sql1Error = false;
+      this.sql2Error = false;
+
+      try {
+        const nSql1 = this.sqlNormalize(this.sql1);
+        const nSql2 = this.sqlNormalize(this.sql2);
+        this.ast1 = this.parseSelectToAst(nSql1);
+        this.ast2 = this.parseSelectToAst(nSql2);
+        this.sql1Error = !this.ast1 && nSql1;
+        this.sql2Error = !this.ast2 && nSql2;
+        if (this.sql1Error || this.sql2Error) return this.$message.error('仅支持Hive SELECT类查询，请检查语句类型/语法！');
+
+        // 计算语句各维度相似度
+        this.textSimilarity = this.calculateTextSimilarity(nSql1, nSql2);
+        this.astStructSimilarity = this.calculateAstStructSimilarity(this.ast1, this.ast2);
+        this.semanticSimilarity = this.calculateSemanticSimilarity(this.ast1, this.ast2);
+        this.finalSimilarity = this.textSimilarity * 0.2 + this.astStructSimilarity * 0.5 + this.semanticSimilarity * 0.3;
+        this.diffHtml = this.generateDiffHtml(this.sql1, this.sql2);
+
+        // 初始化最终综合得分（若未对比结果集，仅显示语句得分）
+        if (this.resultDataSimilarity < 0) {
+          this.finalTotalSimilarity = this.finalSimilarity;
+        } else {
+          this.finalTotalSimilarity = this.finalSimilarity * 0.7 + this.resultDataSimilarity * 0.3;
+        }
+
+        this.showResult = true;
+        if (this.showAstView) {
+          this.ast1Str = JSON.stringify(this.ast1, null, 2);
+          this.ast2Str = JSON.stringify(this.ast2, null, 2);
+        }
+      } catch (e) {
+        console.error('语句对比失败：', e);
+        this.$message.error('查询语句对比出错，请重试！');
+      } finally {
+        this.comparing = false;
+      }
+    },
+
+    /**
+     * 11. 新增：对比结果集相似度
+     */
+    async compareResultData() {
+      if (!this.sql1ExecResult?.success || !this.sql2ExecResult?.success) {
+        return this.$message.warning('请先成功执行两个SQL语句！');
+      }
+      this.dataComparing = true;
+      try {
+        // 计算结果集相似度
+        this.calculateResultDataSimilarity();
+        // 更新最终综合得分
+        this.finalTotalSimilarity = this.finalSimilarity * 0.7 + this.resultDataSimilarity * 0.3;
+        // 确保结果展示
+        this.showResult = true;
+        this.$message.success('结果集相似度对比完成！');
+      } catch (e) {
+        console.error('结果集对比失败：', e);
+        this.$message.error('结果集对比出错，请重试！');
+      } finally {
+        this.dataComparing = false;
+      }
+    },
+
+    /**
+     * 12. 重置表单（新增重置执行结果）
+     */
+    resetForm() {
+      Object.assign(this, {
+        sql1: '', sql2: '', sql1Error: false, sql2Error: false,
+        ast1: null, ast2: null, ast1Str: '', ast2Str: '', showAstView: false,
+        textSimilarity: 0, astStructSimilarity: 0, semanticSimilarity: 0, finalSimilarity: 0,
+        diffHtml: '', semanticDiffList: [], showResult: false, comparing: false,
+        execLoading: { 1: false, 2: false },
+        sql1ExecResult: null, sql2ExecResult: null,
+        dataComparing: false, resultDataSimilarity: -1,
+        colStructSimilarity: 0, rowDataSimilarity: 0, dataDistSimilarity: 0,
+        resultDataDiffList: [], finalTotalSimilarity: 0
+      });
+    },
+
+    /**
+     * 13. 切换AST视图（原有逻辑）
+     */
+    toggleAstView() {
+      this.showAstView = !this.showAstView;
+      if (this.showAstView && this.ast1 && this.ast2) {
+        this.ast1Str = JSON.stringify(this.ast1, null, 2);
+        this.ast2Str = JSON.stringify(this.ast2, null, 2);
+      }
+    }
+  }
+};
+</script>
+
+<style scoped>
+.hive-select-compare-container {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+.compare-card { width: 100%; }
+.card-header { font-size: 16px; font-weight: 600; display: flex; align-items: center; }
+.input-area { display: flex; gap: 20px; margin: 20px 0; }
+.input-item { flex: 1; }
+.input-label { display: block; margin-bottom: 8px; font-weight: 500; }
+.sql-input { width: 100%; resize: vertical; }
+.sql-error-alert { margin-top: 8px; font-size: 12px; }
+.sql-exec-btn { display: flex; align-items: center; gap: 8px; }
+.btn-area { display: flex; gap: 10px; margin-bottom: 20px; }
+
+.ast-view-area { padding: 12px; background: #f5f5f5; border-radius: 4px; margin-bottom: 20px; }
+.ast-label { display: block; margin-bottom: 8px; font-weight: 500; }
+.ast-content { display: flex; gap: 20px; overflow-x: auto; }
+.ast-item { flex: 1; }
+.ast-item span { display: block; font-weight: 500; margin-bottom: 8px; }
+.ast-item pre { font-size: 12px; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; }
+
+/* 结果集展示样式 */
+.result-data-area { margin: 20px 0; padding: 12px; background: #f9f9f9; border-radius: 4px; }
+.result-data-content { display: flex; gap: 20px; }
+.result-data-item { flex: 1; }
+.result-data-title { display: block; font-weight: 500; margin-bottom: 8px; }
+
+/* 对比结果样式 */
+.result-area { padding-top: 20px; border-top: 1px solid #e6e6e6; }
+.similarity-score { font-size: 16px; display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+.similarity-detail { font-size: 14px; line-height: 1.8; }
+
+.diff-area { margin-bottom: 20px; }
+.diff-label { display: block; margin-bottom: 8px; font-weight: 500; }
+.diff-content { padding: 12px; background: #f8f8f8; border-radius: 4px; min-height: 100px; white-space: pre-wrap; font-family: monospace; line-height: 1.5; }
+.diff-same { color: #333; }
+.diff-added { background: #b7f0b7; color: #006400; padding: 0 2px; border-radius: 2px; }
+.diff-deleted { background: #f8c8c8; color: #8b0000; text-decoration: line-through; padding: 0 2px; border-radius: 2px; }
+
+.semantic-diff-area { margin-top: 20px; }
+</style>

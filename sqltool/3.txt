@@ -1,0 +1,191 @@
+/**
+ * 执行Hive SQL（适配数组对象结果集）
+ */
+async executeSql(sqlType) {
+  const sql = sqlType === 1 ? this.sql1 : this.sql2;
+  this.execLoading[sqlType] = true;
+  try {
+    const res = await axios.post('/api/hive/execute', { sql });
+    if (res.data?.success) {
+      const resultData = res.data.data;
+      // 适配数组对象格式：自动从rows提取列名（若后端未返回columns）
+      const columns = resultData.columns || (resultData.rows.length > 0 ? Object.keys(resultData.rows[0]) : []);
+      const result = {
+        success: true,
+        data: {
+          columns: columns, // 列名数组（从对象key提取）
+          rows: resultData.rows || [], // 数组对象格式的行数据
+          rowCount: resultData.rows?.length || 0
+        },
+        errorMsg: ''
+      };
+      if (sqlType === 1) {
+        this.sql1ExecResult = result;
+      } else {
+        this.sql2ExecResult = result;
+      }
+      this.$message.success(`SQL${sqlType}执行成功，返回${result.data.rowCount}行数据`);
+    } else {
+      // 失败逻辑不变
+      const errorResult = {
+        success: false,
+        data: {},
+        errorMsg: res.data?.errorMsg || '执行失败，未知错误'
+      };
+      if (sqlType === 1) {
+        this.sql1ExecResult = errorResult;
+      } else {
+        this.sql2ExecResult = errorResult;
+      }
+      this.$message.error(`SQL${sqlType}执行失败：${errorResult.errorMsg}`);
+    }
+  } catch (e) {
+    // 异常逻辑不变
+    const errorResult = {
+      success: false,
+      data: {},
+      errorMsg: `接口调用失败：${e.message}`
+    };
+    if (sqlType === 1) {
+      this.sql1ExecResult = errorResult;
+    } else {
+      this.sql2ExecResult = errorResult;
+    }
+    this.$message.error(`SQL${sqlType}执行失败：${errorResult.errorMsg}`);
+  } finally {
+    this.execLoading[sqlType] = false;
+  }
+}
+
+
+
+/**
+ * 重构：计算数组对象格式的结果集相似度
+ */
+calculateResultDataSimilarity() {
+  this.resultDataDiffList = [];
+  const data1 = this.sql1ExecResult.data;
+  const data2 = this.sql2ExecResult.data;
+
+  // ========== 1. 列结构相似度（适配数组对象） ==========
+  // 提取列名并标准化（小写、去空格、去重）
+  const getStandardColumns = (columns, rows) => {
+    // 优先用后端返回的columns，否则从行对象提取
+    let cols = columns || (rows.length > 0 ? Object.keys(rows[0]) : []);
+    return cols.map(c => c.toLowerCase().trim()).filter(Boolean).sort();
+  };
+  const cols1 = getStandardColumns(data1.columns, data1.rows);
+  const cols2 = getStandardColumns(data2.columns, data2.rows);
+  
+  // 计算列结构相似度（编辑距离）
+  const colStr1 = cols1.join(',');
+  const colStr2 = cols2.join(',');
+  this.colStructSimilarity = this.calculateTextSimilarity(colStr1, colStr2);
+  // 判断列是否完全匹配（列数+列名）
+  const colMatch = cols1.length === cols2.length && colStr1 === colStr2;
+
+  // ========== 2. 行数据匹配度（适配数组对象） ==========
+  /**
+   * 辅助函数：将数组对象的行转为标准化字符串（按列名排序）
+   * 示例：{id:1, name:"张三"} → "id=1,name=张三"
+   */
+  const standardizeRow = (row, columns) => {
+    // 仅保留共同列（避免因列名不同导致匹配失败）
+    const commonCols = columns.filter(col => row.hasOwnProperty(col));
+    // 按列名排序，保证顺序一致
+    return commonCols.sort().map(col => `${col}=${row[col] || ''}`).join(',');
+  };
+
+  // 标准化所有行
+  const rows1Str = data1.rows.map(row => standardizeRow(row, cols1)).sort();
+  const rows2Str = data2.rows.map(row => standardizeRow(row, cols2)).sort();
+  
+  // 计算交集数量（匹配的行数）
+  const intersection = rows1Str.filter(r => rows2Str.includes(r)).length;
+  const maxRowCount = Math.max(rows1Str.length, rows2Str.length);
+  this.rowDataSimilarity = maxRowCount === 0 ? 1 : intersection / maxRowCount;
+  // 判断行是否完全匹配（行数+每行内容）
+  const rowMatch = rows1Str.length === rows2Str.length && intersection === rows1Str.length;
+
+  // ========== 3. 数据分布相似度（增强版） ==========
+  const rowCount1 = data1.rowCount;
+  const rowCount2 = data2.rowCount;
+  
+  // 基础：总行数相似度
+  const rowCountSimilarity = rowCount1 === 0 && rowCount2 === 0 
+    ? 1 
+    : 1 - Math.abs(rowCount1 - rowCount2) / Math.max(rowCount1, rowCount2);
+
+  // 增强：数值列的均值相似度（可选，提升精准度）
+  const getNumericCols = (cols, rows) => {
+    // 判断列是否为数值列（只要有一行是数字则视为数值列）
+    return cols.filter(col => {
+      return rows.some(row => {
+        const val = row[col];
+        return !isNaN(Number(val)) && val !== '' && val !== null;
+      });
+    });
+  };
+  const getColAvg = (col, rows) => {
+    const values = rows.map(row => Number(row[col])).filter(v => !isNaN(v));
+    return values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length;
+  };
+  // 计算数值列均值相似度
+  const numericCols1 = getNumericCols(cols1, data1.rows);
+  const numericCols2 = getNumericCols(cols2, data2.rows);
+  const commonNumericCols = numericCols1.filter(col => numericCols2.includes(col));
+  let avgSimilarity = 1;
+  if (commonNumericCols.length > 0) {
+    let totalDiff = 0;
+    commonNumericCols.forEach(col => {
+      const avg1 = getColAvg(col, data1.rows);
+      const avg2 = getColAvg(col, data2.rows);
+      const maxAvg = Math.max(Math.abs(avg1), Math.abs(avg2));
+      totalDiff += maxAvg === 0 ? 0 : Math.abs(avg1 - avg2) / maxAvg;
+    });
+    avgSimilarity = 1 - (totalDiff / commonNumericCols.length);
+  }
+
+  // 数据分布相似度 = 总行数相似度(70%) + 数值列均值相似度(30%)
+  this.dataDistSimilarity = rowCountSimilarity * 0.7 + avgSimilarity * 0.3;
+  // 判断分布是否匹配（总行数+数值列均值）
+  const distMatch = rowCount1 === rowCount2 && avgSimilarity >= 0.95;
+
+  // ========== 4. 结果集整体相似度（加权） ==========
+  this.resultDataSimilarity = (
+    this.colStructSimilarity * 0.4 +    // 列结构40%
+    this.rowDataSimilarity * 0.4 +      // 行数据40%
+    this.dataDistSimilarity * 0.2       // 数据分布20%
+  );
+
+  // ========== 5. 生成结果集差异列表（可视化） ==========
+  this.resultDataDiffList = [
+    {
+      dimension: '列结构（列名+列数）',
+      sql1Content: `${cols1.length}列：${colStr1 || '无'}`,
+      sql2Content: `${cols2.length}列：${colStr2 || '无'}`,
+      matchResult: colMatch ? '匹配' : '不匹配'
+    },
+    {
+      dimension: '行数据匹配数',
+      sql1Content: `${rowCount1}行（唯一行：${rows1Str.length}）`,
+      sql2Content: `${rowCount2}行（唯一行：${rows2Str.length}）`,
+      matchResult: rowMatch ? '匹配' : `仅匹配${intersection}行`
+    },
+    {
+      dimension: '数据分布（总行数+数值列均值）',
+      sql1Content: `${rowCount1}行，数值列${numericCols1.length}个`,
+      sql2Content: `${rowCount2}行，数值列${numericCols2.length}个`,
+      matchResult: distMatch ? '匹配' : '不匹配'
+    },
+    {
+      dimension: '结果集整体相似度',
+      sql1Content: '-',
+      sql2Content: '-',
+      matchResult: this.resultDataSimilarity >= 0.8 ? '匹配' : '不匹配'
+    }
+  ];
+
+  // ========== 6. 计算最终综合得分 ==========
+  this.finalTotalSimilarity = this.finalSimilarity * 0.7 + this.resultDataSimilarity * 0.3;
+}
