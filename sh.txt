@@ -328,3 +328,471 @@ async function analyze() {
   console.log('容量预测:', analysis.predictCapacity());
   console.log('异常检测:', analysis.detectAnomalies());
 }
+
+
+
+const axios = require('axios');
+
+class LoadTest {
+  constructor(url, concurrency, duration) {
+    this.url = url;
+    this.concurrency = concurrency;
+    this.duration = duration * 1000; // 转为毫秒
+    this.stats = {
+      totalRequests: 0,
+      success: 0,
+      errors: 0,
+      responseTimes: [],
+      startTime: null,
+      endTime: null,
+    };
+  }
+
+  async start() {
+    this.stats.startTime = Date.now();
+    this.stats.endTime = this.stats.startTime + this.duration;
+
+    const userPromises = [];
+    for (let i = 0; i < this.concurrency; i++) {
+      userPromises.push(this.runUser());
+    }
+
+    await Promise.all(userPromises);
+    return this.calculateStats();
+  }
+
+  async runUser() {
+    while (Date.now() < this.stats.endTime) {
+      const start = Date.now();
+      try {
+        await axios.get(this.url);
+        const latency = Date.now() - start;
+        this.updateStats(true, latency);
+      } catch (error) {
+        this.updateStats(false);
+      }
+    }
+  }
+
+  updateStats(success, latency) {
+    this.stats.totalRequests++;
+    if (success) {
+      this.stats.success++;
+      this.stats.responseTimes.push(latency);
+    } else {
+      this.stats.errors++;
+    }
+  }
+
+  calculateStats() {
+    const totalTime = (this.stats.endTime - this.stats.startTime) / 1000;
+    const avgLatency = this.stats.responseTimes.length > 0 
+      ? this.stats.responseTimes.reduce((a, b) => a + b, 0) / this.stats.responseTimes.length
+      : 0;
+
+    return {
+      totalRequests: this.stats.totalRequests,
+      success: this.stats.success,
+      errors: this.stats.errors,
+      avgLatency: avgLatency.toFixed(2),
+      throughput: (this.stats.totalRequests / totalTime).toFixed(2),
+      duration: totalTime,
+    };
+  }
+}
+
+module.exports = LoadTest;
+
+
+
+const WebSocket = require('ws');
+const { v4: uuidv4 } = require('uuid');
+
+class WSServer {
+  constructor(port) {
+    this.wss = new WebSocket.Server({ port });
+    this.clients = new Map();
+    
+    this.wss.on('connection', (ws) => {
+      const id = uuidv4();
+      this.clients.set(id, ws);
+      
+      ws.on('close', () => {
+        this.clients.delete(id);
+      });
+    });
+  }
+
+  broadcast(data) {
+    this.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(data));
+      }
+    });
+  }
+}
+
+module.exports = WSServer;
+
+
+
+const express = require('express');
+const StressTester = require('./stress-test');
+const WSServer = require('./ws-server');
+const app = express();
+const wsServer = new WSServer(8081);
+
+app.use(express.json());
+
+const runningTests = new Map();
+
+app.post('/api/start-test', async (req, res) => {
+  const testId = Date.now().toString();
+  const config = req.body;
+  
+  const tester = new StressTester(config);
+  runningTests.set(testId, tester);
+  
+  tester.run().then(summary => {
+    wsServer.broadcast({ type: 'complete', testId, summary });
+    runningTests.delete(testId);
+  });
+
+  res.json({ testId });
+});
+
+app.get('/api/results/:testId', (req, res) => {
+  const tester = runningTests.get(req.params.testId);
+  if (!tester) return res.status(404).send('Test not found');
+  
+  res.json(tester.getSummary());
+});
+
+app.listen(3000, () => {
+  console.log('Server running on port 3000');
+});
+
+
+
+<template>
+  <div class="stress-tester">
+    <el-form :model="config" label-width="120px">
+      <el-form-item label="目标URL">
+        <el-input v-model="config.url" placeholder="https://example.com"></el-input>
+      </el-form-item>
+      
+      <el-form-item label="线程数">
+        <el-input-number v-model="config.threads" :min="1"></el-input-number>
+      </el-form-item>
+      
+      <el-form-item label="循环次数">
+        <el-input-number v-model="config.loops" :min="1"></el-input-number>
+      </el-form-item>
+      
+      <el-form-item label="超时时间(ms)">
+        <el-input-number v-model="config.timeout" :min="1000"></el-input-number>
+      </el-form-item>
+      
+      <el-button type="primary" @click="startTest">开始测试</el-button>
+    </el-form>
+
+    <div v-if="summary">
+      <h3>测试结果</h3>
+      <el-row :gutter="20">
+        <el-col :span="6">
+          <el-statistic title="总请求数" :value="summary.total"></el-statistic>
+        </el-col>
+        <el-col :span="6">
+          <el-statistic 
+            title="成功率" 
+            :value="(summary.success / summary.total * 100).toFixed(2)"
+            suffix="%"
+          ></el-statistic>
+        </el-col>
+        <el-col :span="6">
+          <el-statistic 
+            title="平均耗时"
+            :value="summary.avgDuration.toFixed(2)"
+            suffix="ms"
+          ></el-statistic>
+        </el-col>
+      </el-row>
+
+      <h4>响应时间分布</h4>
+      <div ref="chart" style="height: 300px;"></div>
+    </div>
+  </div>
+</template>
+
+<script>
+import echarts from 'echarts'
+
+export default {
+  data() {
+    return {
+      config: {
+        url: 'https://example.com',
+        threads: 10,
+        loops: 100,
+        method: 'GET',
+        timeout: 5000
+      },
+      summary: null,
+      chart: null
+    }
+  },
+  mounted() {
+    this.$websocket.connect('ws://localhost:8081')
+    this.$websocket.listen(msg => {
+      if (msg.type === 'complete') {
+        this.summary = msg.summary
+        this.renderChart()
+      }
+    })
+  },
+  methods: {
+    async startTest() {
+      try {
+        const { data } = await this.$axios.post('http://localhost:3000/api/start-test', this.config)
+        this.testId = data.testId
+      } catch (error) {
+        this.$message.error('测试启动失败')
+      }
+    },
+    renderChart() {
+      if (!this.chart) {
+        this.chart = echarts.init(this.$refs.chart)
+      }
+      
+      const option = {
+        xAxis: {
+          type: 'category',
+          data: this.summary.details.map((_, i) => i + 1)
+        },
+        yAxis: {
+          type: 'value',
+          name: '响应时间(ms)'
+        },
+        series: [{
+          data: this.summary.details.map(d => d.duration),
+          type: 'line',
+          smooth: true
+        }]
+      }
+      
+      this.chart.setOption(option)
+    }
+  }
+}
+</script>
+
+
+
+const axios = require('axios');
+
+class LoadTest {
+  constructor(url, concurrency, duration) {
+    this.url = url;
+    this.concurrency = concurrency;
+    this.duration = duration * 1000; // 转为毫秒
+    this.stats = {
+      totalRequests: 0,
+      success: 0,
+      errors: 0,
+      responseTimes: [],
+      startTime: null,
+      endTime: null,
+    };
+  }
+
+  async start() {
+    this.stats.startTime = Date.now();
+    this.stats.endTime = this.stats.startTime + this.duration;
+
+    const userPromises = [];
+    for (let i = 0; i < this.concurrency; i++) {
+      userPromises.push(this.runUser());
+    }
+
+    await Promise.all(userPromises);
+    return this.calculateStats();
+  }
+
+  async runUser() {
+    while (Date.now() < this.stats.endTime) {
+      const start = Date.now();
+      try {
+        await axios.get(this.url);
+        const latency = Date.now() - start;
+        this.updateStats(true, latency);
+      } catch (error) {
+        this.updateStats(false);
+      }
+    }
+  }
+
+  updateStats(success, latency) {
+    this.stats.totalRequests++;
+    if (success) {
+      this.stats.success++;
+      this.stats.responseTimes.push(latency);
+    } else {
+      this.stats.errors++;
+    }
+  }
+
+  calculateStats() {
+    const totalTime = (this.stats.endTime - this.stats.startTime) / 1000;
+    const avgLatency = this.stats.responseTimes.length > 0 
+      ? this.stats.responseTimes.reduce((a, b) => a + b, 0) / this.stats.responseTimes.length
+      : 0;
+
+    return {
+      totalRequests: this.stats.totalRequests,
+      success: this.stats.success,
+      errors: this.stats.errors,
+      avgLatency: avgLatency.toFixed(2),
+      throughput: (this.stats.totalRequests / totalTime).toFixed(2),
+      duration: totalTime,
+    };
+  }
+}
+
+module.exports = LoadTest;
+
+
+const express = require('express');
+const LoadTest = require('./loadTest');
+const app = express();
+app.use(express.json());
+
+let activeTest = null;
+
+app.post('/api/start', async (req, res) => {
+  if (activeTest) return res.status(400).json({ error: 'Test already running' });
+
+  const { url, concurrency, duration } = req.body;
+  activeTest = new LoadTest(url, concurrency, duration);
+  
+  activeTest.start()
+    .then(results => {
+      activeTest = null;
+      return res.json(results);
+    })
+    .catch(error => {
+      activeTest = null;
+      res.status(500).json({ error: error.message });
+    });
+});
+
+app.get('/api/status', (req, res) => {
+  res.json({
+    running: !!activeTest,
+    stats: activeTest ? activeTest.stats : null
+  });
+});
+
+const PORT = 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+
+
+<template>
+  <div class="container">
+    <el-form :model="form" label-width="120px" @submit.native.prevent="startTest">
+      <el-form-item label="Target URL" required>
+        <el-input v-model="form.url" placeholder="http://example.com"></el-input>
+      </el-form-item>
+      
+      <el-form-item label="Concurrency">
+        <el-input-number 
+          v-model="form.concurrency" 
+          :min="1" 
+          :max="1000"
+        ></el-input-number>
+      </el-form-item>
+      
+      <el-form-item label="Duration (sec)">
+        <el-input-number
+          v-model="form.duration"
+          :min="1"
+          :max="300"
+        ></el-input-number>
+      </el-form-item>
+      
+      <el-form-item>
+        <el-button 
+          type="primary" 
+          native-type="submit"
+          :loading="isTesting"
+        >Start Test</el-button>
+      </el-form-item>
+    </el-form>
+
+    <el-card v-if="results" class="result-card">
+      <div slot="header">Test Results</div>
+      <el-table :data="[results]" border>
+        <el-table-column prop="totalRequests" label="Total Requests"/>
+        <el-table-column prop="success" label="Success"/>
+        <el-table-column prop="errors" label="Errors"/>
+        <el-table-column prop="avgLatency" label="Avg Latency (ms)"/>
+        <el-table-column prop="throughput" label="Throughput (req/s)"/>
+      </el-table>
+      
+      <h4 style="margin-top: 20px">Latency Distribution</h4>
+      <el-progress 
+        v-for="(latency, index) in responseTimes"
+        :key="index"
+        :percentage="(latency / maxLatency * 100).toFixed(2)"
+        :format="() => `${latency}ms`"
+        status="success"
+      ></el-progress>
+    </el-card>
+  </div>
+</template>
+
+<script>
+import axios from 'axios';
+
+export default {
+  data() {
+    return {
+      form: {
+        url: 'http://localhost:3000', // 测试默认地址
+        concurrency: 50,
+        duration: 30
+      },
+      isTesting: false,
+      results: null,
+      responseTimes: [],
+      maxLatency: 0
+    };
+  },
+  methods: {
+    async startTest() {
+      this.isTesting = true;
+      try {
+        const response = await axios.post('http://localhost:3000/api/start', this.form);
+        this.results = response.data;
+        this.responseTimes = response.data.responseTimes || [];
+        this.maxLatency = Math.max(...this.responseTimes) || 1;
+      } catch (error) {
+        this.$message.error('Test failed: ' + error.message);
+      } finally {
+        this.isTesting = false;
+      }
+    }
+  }
+};
+</script>
+
+<style scoped>
+.container {
+  max-width: 800px;
+  margin: 20px auto;
+  padding: 20px;
+}
+.result-card {
+  margin-top: 30px;
+}
+</style>
