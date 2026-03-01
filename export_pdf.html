@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vue2+ElementUI PDF导出（和页面完全一致）</title>
+    <!-- 基础依赖 -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.bootcdn.net/ajax/libs/element-ui/2.15.14/theme-chalk/index.css"
+    />
+    <script src="https://cdn.bootcdn.net/ajax/libs/element-ui/2.15.14/index.js"></script>
+
+    <!-- showdown markdown库 -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/showdown/2.1.0/showdown.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.bootcdn.net/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css"
+    />
+    <script src="https://cdn.bootcdn.net/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+    <!-- PDF导出相关 -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <style>
+      /* ========== 页面基础样式（和导出容器完全同步） ========== */
+      body {
+        margin: 0;
+        padding: 20px;
+        background-color: #f5f5f5;
+        font-family:
+          'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB',
+          'Microsoft YaHei', Arial, sans-serif;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      .markdown-table-page {
+        background: #fff;
+        padding: 20px;
+        border-radius: 4px;
+        box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+
+      .table-container {
+        background: #ffffff;
+        overflow: auto;
+        margin-top: 10px;
+        min-height: 200px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      /* ========== Markdown内容样式（页面/导出完全一致） ========== */
+      .markdown-content {
+        padding: 10px;
+        line-height: 1.6;
+        font-size: 14px;
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        overflow: visible !important;
+        word-break: break-all !important;
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+      }
+
+      .markdown-content pre {
+        background: #282c34 !important;
+        padding: 15px !important;
+        border-radius: 4px;
+        overflow: visible !important;
+        margin: 10px 0 !important;
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        max-height: none !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace !important;
+      }
+
+      .markdown-content code {
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace !important;
+        font-size: 12px !important;
+        line-height: 1.5 !important;
+        white-space: pre-wrap !important;
+      }
+
+      .markdown-content h1 {
+        font-size: 24px !important;
+        margin: 10px 0 !important;
+      }
+      .markdown-content h2 {
+        font-size: 20px !important;
+        margin: 8px 0 !important;
+      }
+      .markdown-content h3 {
+        font-size: 16px !important;
+        margin: 6px 0 !important;
+      }
+      .markdown-content ul {
+        padding-left: 20px !important;
+        margin: 5px 0 !important;
+      }
+      .markdown-content blockquote {
+        border-left: 4px solid #ddd !important;
+        padding-left: 10px !important;
+        color: #666 !important;
+        margin: 10px 0 !important;
+      }
+
+      /* ========== 表格样式（1:1还原页面） ========== */
+      .el-table {
+        --el-table-row-hover-bg-color: transparent !important;
+        width: 100% !important;
+        border-collapse: collapse !important;
+        box-sizing: border-box !important;
+      }
+      .el-table .cell {
+        overflow: visible !important;
+        white-space: normal !important;
+        word-break: break-all !important;
+        line-height: 1.6 !important;
+        padding: 15px !important;
+        display: block !important;
+        font-size: 14px !important;
+        box-sizing: border-box !important;
+      }
+      .el-table tr {
+        height: auto !important;
+        display: table-row !important;
+      }
+      .el-table td,
+      .el-table th {
+        padding: 0 !important;
+        height: auto !important;
+        white-space: normal !important;
+        /* border: 1px solid #e6e6e6 !important; */
+        vertical-align: top !important;
+        box-sizing: border-box !important;
+      }
+      .el-table th {
+        padding: 10px 0 !important;
+        white-space: nowrap !important;
+        background: #f5f7fa !important;
+        font-weight: bold !important;
+        text-align: center !important;
+      }
+
+      /* ========== 列宽精准控制（页面/导出一致） ========== */
+      .id-column {
+        width: 80px !important;
+        min-width: 80px !important;
+      }
+      .title-column {
+        width: 200px !important;
+        min-width: 200px !important;
+      }
+      .markdown-column {
+        width: 40% !important;
+        min-width: 500px !important;
+      }
+      .sql-column {
+        width: 50% !important;
+        min-width: 600px !important;
+      }
+
+      /* ========== 导出容器样式（100%复刻页面） ========== */
+      .pdf-export-clone {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        z-index: -9999 !important;
+        background: #fff !important;
+        padding: 20px !important;
+        margin: 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        max-width: none !important;
+        max-height: none !important;
+        transform: none !important; /* 禁用任何缩放/变形 */
+        box-shadow: none !important;
+        border: none !important;
+        box-sizing: border-box !important;
+        /* 继承页面所有字体/样式 */
+        font-family: inherit !important;
+        font-size: inherit !important;
+        line-height: inherit !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app" class="markdown-table-page">
+      <el-button
+        type="primary"
+        icon="el-icon-download"
+        style="margin-bottom: 20px"
+        @click="exportToPdf"
+      >
+        导出PDF（和页面完全一致）
+      </el-button>
+
+      <!-- 页面渲染容器 -->
+      <div ref="originalContainer" class="table-container">
+        <el-table
+          ref="targetTable"
+          :data="tableData"
+          border
+          style="width: 100%"
+          :header-cell-style="{ background: '#f5f7fa', fontWeight: 'bold', textAlign: 'center' }"
+        >
+          <el-table-column
+            prop="id"
+            label="序号"
+            class-name="id-column"
+            align="center"
+          ></el-table-column>
+          <el-table-column
+            prop="title"
+            label="标题"
+            class-name="title-column"
+          ></el-table-column>
+          <el-table-column label="Markdown内容" class-name="markdown-column">
+            <template slot-scope="scope">
+              <div
+                class="markdown-content"
+                v-html="renderMarkdown(scope.row.content)"
+              ></div>
+            </template>
+          </el-table-column>
+          <el-table-column label="SQL语句" class-name="sql-column">
+            <template slot-scope="scope">
+              <div
+                class="markdown-content"
+                v-html="renderMarkdown(`\`\`\`sql\n${scope.row.sql}\n\`\`\``)"
+              ></div>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <!-- 导出克隆容器（默认隐藏） -->
+      <div
+        ref="exportClone"
+        class="pdf-export-clone"
+        style="display: none"
+      ></div>
+    </div>
+
+    <script>
+      window.onload = function () {
+        // 初始化Markdown转换器
+        const converter = new showdown.Converter({
+          tables: true,
+          tasklists: true,
+          strikethrough: true,
+          ghCodeBlocks: true,
+          emoji: false,
+          simplifiedAutoLink: true,
+          noHeaderId: true,
+        });
+
+        new Vue({
+          el: '#app',
+          data: () => ({
+            tableData: [
+              {
+                id: 1,
+                title: '用户查询',
+                content:
+                  '# 用户信息查询\n\n这是一个查询用户信息的示例：\n- 条件：用户状态为启用\n- 时间范围：近7天\n- 包含关联表：用户角色表、部门表',
+                sql: `SELECT 
+  u.id, 
+  u.username, 
+  u.email, 
+  u.phone, 
+  u.create_time, 
+  r.role_name, 
+  d.dept_name,
+  CASE u.status 
+    WHEN 1 THEN '启用' 
+    WHEN 0 THEN '禁用' 
+    ELSE '未知' 
+  END AS status_text
+FROM users u
+LEFT JOIN roles r ON u.role_id = r.id
+LEFT JOIN departments d ON u.dept_id = d.id
+WHERE u.status = 1
+  AND u.create_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+ORDER BY u.create_time DESC
+LIMIT 100;`,
+              },
+              {
+                id: 2,
+                title: '订单统计',
+                content:
+                  '## 订单金额统计\n\n> 统计每个用户的订单总金额、订单数、平均订单金额\n> 包含条件：2024年1月1日至今，已支付的订单',
+                sql: `SELECT 
+  u.id AS user_id,
+  u.username,
+  COUNT(o.id) AS order_count,
+  SUM(o.amount) AS total_amount,
+  AVG(o.amount) AS avg_amount,
+  MAX(o.amount) AS max_order_amount,
+  MIN(o.amount) AS min_order_amount,
+  DATE_FORMAT(MIN(o.create_time), '%Y-%m-%d') AS first_order_time,
+  DATE_FORMAT(MAX(o.create_time), '%Y-%m-%d') AS last_order_time
+FROM orders o
+LEFT JOIN users u ON o.user_id = u.id
+WHERE o.pay_status = 1
+  AND o.create_time >= '2024-01-01'
+GROUP BY u.id, u.username
+HAVING COUNT(o.id) > 0
+ORDER BY total_amount DESC;`,
+              },
+              {
+                id: 3,
+                title: '数据更新',
+                content:
+                  '### 批量更新用户状态\n\n**注意**：执行前请先备份数据！\n- 更新条件：超过1年未登录的用户\n- 更新内容：将状态改为禁用\n- 执行方式：事务执行，确保数据一致性',
+                sql: `START TRANSACTION;
+
+-- 先备份要更新的数据
+CREATE TABLE users_backup_20240228 
+AS SELECT * FROM users WHERE last_login_time < DATE_SUB(NOW(), INTERVAL 1 YEAR);
+
+-- 执行更新操作
+UPDATE users 
+SET 
+  status = 0,
+  update_time = NOW(),
+  update_by = 'system'
+WHERE last_login_time < DATE_SUB(NOW(), INTERVAL 1 YEAR)
+  AND status = 1;
+
+-- 提交事务
+COMMIT;
+
+-- 查看更新结果
+SELECT 
+  COUNT(*) AS total_updated_users 
+FROM users 
+WHERE last_login_time < DATE_SUB(NOW(), INTERVAL 1 YEAR)
+  AND status = 0;`,
+              },
+              {
+                id: 4,
+                title: '商品库存查询',
+                content:
+                  '## 商品库存及销售统计\n\n### 统计维度：\n1. 商品分类\n2. 库存预警（低于100件）\n3. 近30天销量',
+                sql: `SELECT 
+  p.id AS product_id,
+  p.product_name,
+  c.category_name,
+  p.stock_quantity,
+  CASE 
+    WHEN p.stock_quantity < 100 THEN '预警'
+    WHEN p.stock_quantity < 500 THEN '正常'
+    ELSE '充足'
+  END AS stock_status,
+  IFNULL(s.sale_count, 0) AS sale_count_30d,
+  p.price,
+  p.create_time
+FROM products p
+LEFT JOIN categories c ON p.category_id = c.id
+LEFT JOIN (
+  SELECT 
+    product_id,
+    COUNT(*) AS sale_count
+  FROM order_items oi
+  LEFT JOIN orders o ON oi.order_id = o.id
+  WHERE o.create_time >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+    AND o.order_status = 3 -- 已完成
+  GROUP BY product_id
+) s ON p.id = s.product_id
+WHERE p.is_deleted = 0
+ORDER BY 
+  FIELD(stock_status, '预警', '正常', '充足'),
+  p.stock_quantity ASC;`,
+              },
+              {
+                id: 5,
+                title: '多表关联分析',
+                content:
+                  '### 用户行为分析报表\n\n**分析内容**：\n- 用户登录次数\n- 下单转化率\n- 客单价分布\n- 复购率统计',
+                sql: `WITH user_login_stats AS (
+  SELECT 
+    user_id,
+    COUNT(*) AS login_count,
+    MAX(login_time) AS last_login_time
+  FROM user_logs
+  WHERE log_type = 'login'
+    AND login_time >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+  GROUP BY user_id
+),
+user_order_stats AS (
+  SELECT 
+    user_id,
+    COUNT(*) AS order_count,
+    SUM(amount) AS total_spend,
+    COUNT(DISTINCT DATE(create_time)) AS active_days
+  FROM orders
+  WHERE create_time >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+  GROUP BY user_id
+)
+SELECT 
+  u.id,
+  u.username,
+  u.register_time,
+  IFNULL(uls.login_count, 0) AS login_count,
+  IFNULL(uos.order_count, 0) AS order_count,
+  IFNULL(uos.total_spend, 0) AS total_spend,
+  CASE 
+    WHEN IFNULL(uls.login_count, 0) = 0 THEN 0
+    ELSE ROUND(IFNULL(uos.order_count, 0) / uls.login_count * 100, 2)
+  END AS conversion_rate,
+  IFNULL(uos.active_days, 0) AS active_days,
+  CASE 
+    WHEN IFNULL(uos.order_count, 0) >= 2 THEN '复购用户'
+    WHEN IFNULL(uos.order_count, 0) = 1 THEN '新购用户'
+    ELSE '未下单用户'
+  END AS user_type
+FROM users u
+LEFT JOIN user_login_stats uls ON u.id = uls.user_id
+LEFT JOIN user_order_stats uos ON u.id = uos.user_id
+WHERE u.status = 1
+ORDER BY conversion_rate DESC;`,
+              },
+              {
+                id: 6,
+                title: '数据清理',
+                content:
+                  '## 清理无效数据\n\n**清理范围**：\n- 测试数据（用户名包含test）\n- 空订单（金额为0）\n- 过期的验证码（超过24小时）',
+                sql: `-- 1. 删除测试用户数据
+DELETE FROM users 
+WHERE username LIKE '%test%' 
+  AND create_time < DATE_SUB(NOW(), INTERVAL 1 MONTH);
+
+-- 2. 删除空订单
+DELETE FROM orders 
+WHERE amount = 0 
+  AND order_status = 0 -- 未支付
+  AND create_time < DATE_SUB(NOW(), INTERVAL 7 DAY);
+
+-- 3. 清理过期验证码
+DELETE FROM verification_codes 
+WHERE create_time < DATE_SUB(NOW(), INTERVAL 24 HOUR);
+
+-- 4. 优化表结构
+OPTIMIZE TABLE users;
+OPTIMIZE TABLE orders;
+OPTIMIZE TABLE verification_codes;
+
+-- 5. 统计清理结果
+SELECT 
+  (SELECT COUNT(*) FROM users WHERE username LIKE '%test%') AS remaining_test_users,
+  (SELECT COUNT(*) FROM orders WHERE amount = 0) AS remaining_empty_orders,
+  (SELECT COUNT(*) FROM verification_codes WHERE create_time < DATE_SUB(NOW(), INTERVAL 24 HOUR)) AS remaining_expired_codes;`,
+              },
+            ],
+            converter: converter,
+          }),
+          methods: {
+            // Markdown渲染（和页面逻辑完全一致）
+            renderMarkdown(content) {
+              if (!content) return '';
+              let html = this.converter.makeHtml(content);
+              const tempDiv = document.createElement('div');
+              tempDiv.innerHTML = html;
+
+              // 代码高亮（和页面一致）
+              tempDiv.querySelectorAll('pre code').forEach((block) => {
+                const lang = block.className.replace('language-', '') || 'sql';
+                try {
+                  block.innerHTML = hljs.highlight(block.textContent, {
+                    language: lang,
+                  }).value;
+                } catch (e) {
+                  block.innerHTML = hljs.highlightAuto(block.textContent).value;
+                }
+              });
+              return tempDiv.innerHTML;
+            },
+
+            // 核心：导出PDF（1:1还原页面）
+            async exportToPdf() {
+              try {
+                this.$message.info('正在生成和页面一致的PDF，请稍候...');
+                const originalEl = this.$refs.originalContainer;
+                const cloneEl = this.$refs.exportClone;
+
+                // ========== 步骤1：100%复刻页面容器和样式 ==========
+                cloneEl.style.display = 'block';
+                // 完全复制DOM结构（包括已渲染的Markdown/代码高亮）
+                cloneEl.innerHTML = originalEl.innerHTML;
+                // 同步容器尺寸（和页面完全一致）
+                cloneEl.style.width = originalEl.offsetWidth + 'px';
+                cloneEl.style.height = originalEl.scrollHeight + 'px';
+                // 强制重绘（确保样式生效）
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+
+                // ========== 步骤2：精准渲染Canvas（无缩放偏差） ==========
+                const canvas = await html2canvas(cloneEl, {
+                  scale: 1, // 关键：禁用Canvas缩放，1:1渲染
+                  useCORS: true,
+                  backgroundColor: '#ffffff',
+                  allowTaint: true,
+                  scrollX: 0,
+                  scrollY: 0,
+                  // 关键：使用页面实际尺寸，而非可视区域
+                  windowWidth: originalEl.offsetWidth,
+                  windowHeight: originalEl.scrollHeight,
+                  // 禁用裁剪，完整渲染
+                  clip: false,
+                  // 确保所有元素都被渲染
+                  ignoreElements: () => false,
+                });
+
+                // ========== 步骤3：PDF绘制（精准匹配页面比例） ==========
+                const pdf = new jspdf.jsPDF({
+                  orientation:
+                    originalEl.offsetWidth > originalEl.offsetHeight
+                      ? 'landscape'
+                      : 'portrait',
+                  unit: 'px', // 关键：使用像素单位，和页面一致
+                  format: [originalEl.offsetWidth, originalEl.scrollHeight], // 自定义尺寸，1:1匹配
+                });
+
+                // 1:1绘制Canvas到PDF（无偏移）
+                pdf.addImage(
+                  canvas.toDataURL('image/png'),
+                  'PNG',
+                  0, // X坐标：0，无偏移
+                  0, // Y坐标：0，无偏移
+                  originalEl.offsetWidth, // PDF宽度：和页面容器一致
+                  originalEl.scrollHeight, // PDF高度：和页面内容一致
+                );
+
+                // ========== 步骤4：清理+保存 ==========
+                cloneEl.style.display = 'none';
+                pdf.save(`页面复刻PDF_${new Date().getTime()}.pdf`);
+                this.$message.success('PDF导出完成，和页面样式100%一致！');
+              } catch (error) {
+                console.error('PDF导出失败:', error);
+                this.$message.error(`导出失败：${error.message}`);
+                // 兜底隐藏克隆容器
+                this.$refs.exportClone.style.display = 'none';
+              }
+            },
+          },
+        });
+      };
+    </script>
+  </body>
+</html>
