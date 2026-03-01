@@ -51,6 +51,7 @@
         overflow: auto;
         margin-top: 10px;
         min-height: 200px;
+        padding: 10px;
         width: 100%;
         box-sizing: border-box;
       }
@@ -156,40 +157,63 @@
         width: 80px !important;
         min-width: 80px !important;
       }
+      .dbresult-column {
+        width: 25% !important;
+        min-width: 300px !important;
+      }
       .title-column {
-        width: 200px !important;
-        min-width: 200px !important;
+        width: 150px !important;
+        min-width: 150px !important;
       }
       .markdown-column {
-        width: 40% !important;
-        min-width: 500px !important;
+        width: 25% !important;
+        min-width: 350px !important;
       }
       .sql-column {
-        width: 50% !important;
-        min-width: 600px !important;
+        width: 35% !important;
+        min-width: 450px !important;
+      }
+      /* DB Result 表格样式 */
+      .db-result-table table {
+        border-collapse: collapse !important;
+        border-spacing: 0 !important;
+        width: 100% !important;
+        font-size: 12px !important;
+        margin: 5px 0 !important;
       }
 
+      .db-result-table th,
+      .db-result-table td {
+        border: 1px solid #ddd !important;
+        padding: 5px !important;
+        text-align: left !important;
+      }
+
+      .db-result-table th {
+        background-color: #f5f7fa !important;
+        font-weight: 600 !important;
+      }
       /* ========== 导出容器样式（100%复刻页面） ========== */
       .pdf-export-clone {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        z-index: -9999 !important;
-        background: #fff !important;
-        padding: 20px !important;
-        margin: 0 !important;
-        width: 100% !important;
-        height: auto !important;
-        max-width: none !important;
-        max-height: none !important;
-        transform: none !important; /* 禁用任何缩放/变形 */
-        box-shadow: none !important;
-        border: none !important;
-        box-sizing: border-box !important;
-        /* 继承页面所有字体/样式 */
-        font-family: inherit !important;
-        font-size: inherit !important;
-        line-height: inherit !important;
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 9999;
+        background: #fff;
+        margin: 0;
+        padding: 0; /* 移除内边距 */
+        width: auto; /* 由 JS 动态设置 */
+        height: auto;
+        max-width: none;
+        max-height: none;
+        overflow: visible; /* 确保内容可见 */
+        transform: none;
+        box-shadow: none;
+        border: none;
+        box-sizing: border-box;
+        font-family: inherit;
+        font-size: inherit;
+        line-height: inherit;
       }
     </style>
   </head>
@@ -206,6 +230,7 @@
 
       <!-- 页面渲染容器 -->
       <div ref="originalContainer" class="table-container">
+        <h2 style="text-align: center">Report</h2>
         <el-table
           ref="targetTable"
           :data="tableData"
@@ -214,16 +239,42 @@
           :header-cell-style="{ background: '#f5f7fa', fontWeight: 'bold', textAlign: 'center' }"
         >
           <el-table-column
-            prop="id"
-            label="序号"
-            class-name="id-column"
-            align="center"
-          ></el-table-column>
-          <el-table-column
             prop="title"
             label="标题"
             class-name="title-column"
           ></el-table-column>
+          <el-table-column label="DB Result" class-name="dbresult-column">
+            <template slot-scope="scope">
+              <div class="markdown-content db-result-table">
+                <table v-if="scope.row.dbResult && scope.row.dbResult.length">
+                  <thead>
+                    <tr>
+                      <th
+                        v-for="key in Object.keys(scope.row.dbResult[0])"
+                        :key="key"
+                      >
+                        {{ key }}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="(item, index) in scope.row.dbResult"
+                      :key="index"
+                    >
+                      <td
+                        v-for="key in Object.keys(scope.row.dbResult[0])"
+                        :key="key"
+                      >
+                        {{ item[key] }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-else class="empty-data">暂无数据</div>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column label="Markdown内容" class-name="markdown-column">
             <template slot-scope="scope">
               <div
@@ -270,9 +321,32 @@
             tableData: [
               {
                 id: 1,
-                title: '用户查询',
+                title: 'User Query',
+                dbResult: [
+                  {
+                    id: 1,
+                    username: 'alice',
+                    email: 'alice@example.com',
+                    phone: '13800001111',
+                    status: 'Enabled',
+                  },
+                  {
+                    id: 2,
+                    username: 'bob',
+                    email: 'bob@example.com',
+                    phone: '13800002222',
+                    status: 'Enabled',
+                  },
+                  {
+                    id: 3,
+                    username: 'carol',
+                    email: 'carol@example.com',
+                    phone: '13800003333',
+                    status: 'Enabled',
+                  },
+                ],
                 content:
-                  '# 用户信息查询\n\n这是一个查询用户信息的示例：\n- 条件：用户状态为启用\n- 时间范围：近7天\n- 包含关联表：用户角色表、部门表',
+                  '# User Information Query\n\nExample of querying user information:\n- Condition: users with status enabled\n- Time range: last 7 days\n- Includes related tables: user roles table, departments table',
                 sql: `SELECT 
   u.id, 
   u.username, 
@@ -282,9 +356,9 @@
   r.role_name, 
   d.dept_name,
   CASE u.status 
-    WHEN 1 THEN '启用' 
-    WHEN 0 THEN '禁用' 
-    ELSE '未知' 
+    WHEN 1 THEN 'Enabled' 
+    WHEN 0 THEN 'Disabled' 
+    ELSE 'Unknown' 
   END AS status_text
 FROM users u
 LEFT JOIN roles r ON u.role_id = r.id
@@ -296,9 +370,32 @@ LIMIT 100;`,
               },
               {
                 id: 2,
-                title: '订单统计',
+                title: 'Order Statistics',
+                dbResult: [
+                  {
+                    id: 1,
+                    username: 'alice',
+                    email: 'alice@example.com',
+                    phone: '13800001111',
+                    status: 'Enabled',
+                  },
+                  {
+                    id: 2,
+                    username: 'bob',
+                    email: 'bob@example.com',
+                    phone: '13800002222',
+                    status: 'Enabled',
+                  },
+                  {
+                    id: 3,
+                    username: 'carol',
+                    email: 'carol@example.com',
+                    phone: '13800003333',
+                    status: 'Enabled',
+                  },
+                ],
                 content:
-                  '## 订单金额统计\n\n> 统计每个用户的订单总金额、订单数、平均订单金额\n> 包含条件：2024年1月1日至今，已支付的订单',
+                  '## Order Amount Statistics\n\n> Calculate total order amount, order count, average order amount per user\n> Conditions: paid orders since January 1, 2024',
                 sql: `SELECT 
   u.id AS user_id,
   u.username,
@@ -319,16 +416,16 @@ ORDER BY total_amount DESC;`,
               },
               {
                 id: 3,
-                title: '数据更新',
+                title: 'Data Update',
                 content:
-                  '### 批量更新用户状态\n\n**注意**：执行前请先备份数据！\n- 更新条件：超过1年未登录的用户\n- 更新内容：将状态改为禁用\n- 执行方式：事务执行，确保数据一致性',
+                  '### Batch Update User Status\n\n**Note**: Please backup data before execution!\n- Update condition: users who have not logged in for over 1 year\n- Update content: set status to disabled\n- Execution method: use transaction to ensure data consistency',
                 sql: `START TRANSACTION;
 
--- 先备份要更新的数据
+-- Backup data to be updated first
 CREATE TABLE users_backup_20240228 
 AS SELECT * FROM users WHERE last_login_time < DATE_SUB(NOW(), INTERVAL 1 YEAR);
 
--- 执行更新操作
+-- Perform update operation
 UPDATE users 
 SET 
   status = 0,
@@ -337,10 +434,10 @@ SET
 WHERE last_login_time < DATE_SUB(NOW(), INTERVAL 1 YEAR)
   AND status = 1;
 
--- 提交事务
+-- Commit transaction
 COMMIT;
 
--- 查看更新结果
+-- View update results
 SELECT 
   COUNT(*) AS total_updated_users 
 FROM users 
@@ -349,18 +446,18 @@ WHERE last_login_time < DATE_SUB(NOW(), INTERVAL 1 YEAR)
               },
               {
                 id: 4,
-                title: '商品库存查询',
+                title: 'Product Inventory Query',
                 content:
-                  '## 商品库存及销售统计\n\n### 统计维度：\n1. 商品分类\n2. 库存预警（低于100件）\n3. 近30天销量',
+                  '## Product Inventory and Sales Statistics\n\n### Statistics Dimensions:\n1. Product category\n2. Inventory alert (less than 100 items)\n3. Sales volume in the last 30 days',
                 sql: `SELECT 
   p.id AS product_id,
   p.product_name,
   c.category_name,
   p.stock_quantity,
   CASE 
-    WHEN p.stock_quantity < 100 THEN '预警'
-    WHEN p.stock_quantity < 500 THEN '正常'
-    ELSE '充足'
+    WHEN p.stock_quantity < 100 THEN 'Alert'
+    WHEN p.stock_quantity < 500 THEN 'Normal'
+    ELSE 'Sufficient'
   END AS stock_status,
   IFNULL(s.sale_count, 0) AS sale_count_30d,
   p.price,
@@ -374,19 +471,19 @@ LEFT JOIN (
   FROM order_items oi
   LEFT JOIN orders o ON oi.order_id = o.id
   WHERE o.create_time >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-    AND o.order_status = 3 -- 已完成
+    AND o.order_status = 3 -- Completed
   GROUP BY product_id
 ) s ON p.id = s.product_id
 WHERE p.is_deleted = 0
 ORDER BY 
-  FIELD(stock_status, '预警', '正常', '充足'),
+  FIELD(stock_status, 'Alert', 'Normal', 'Sufficient'),
   p.stock_quantity ASC;`,
               },
               {
                 id: 5,
-                title: '多表关联分析',
+                title: 'Multi-table Join Analysis',
                 content:
-                  '### 用户行为分析报表\n\n**分析内容**：\n- 用户登录次数\n- 下单转化率\n- 客单价分布\n- 复购率统计',
+                  '### User Behavior Analysis Report\n\n**Analysis Content**:\n- User login count\n- Order conversion rate\n- Average order value distribution\n- Repeat purchase rate',
                 sql: `WITH user_login_stats AS (
   SELECT 
     user_id,
@@ -420,9 +517,9 @@ SELECT
   END AS conversion_rate,
   IFNULL(uos.active_days, 0) AS active_days,
   CASE 
-    WHEN IFNULL(uos.order_count, 0) >= 2 THEN '复购用户'
-    WHEN IFNULL(uos.order_count, 0) = 1 THEN '新购用户'
-    ELSE '未下单用户'
+    WHEN IFNULL(uos.order_count, 0) >= 2 THEN 'Repeat Buyer'
+    WHEN IFNULL(uos.order_count, 0) = 1 THEN 'New Buyer'
+    ELSE 'Non-buyer'
   END AS user_type
 FROM users u
 LEFT JOIN user_login_stats uls ON u.id = uls.user_id
@@ -432,30 +529,30 @@ ORDER BY conversion_rate DESC;`,
               },
               {
                 id: 6,
-                title: '数据清理',
+                title: 'Data Cleanup',
                 content:
-                  '## 清理无效数据\n\n**清理范围**：\n- 测试数据（用户名包含test）\n- 空订单（金额为0）\n- 过期的验证码（超过24小时）',
-                sql: `-- 1. 删除测试用户数据
+                  '## Clean Up Invalid Data\n\n**Cleanup Scope**:\n- Test data (username containing "test")\n- Empty orders (amount = 0)\n- Expired verification codes (older than 24 hours)',
+                sql: `-- 1. Delete test user data
 DELETE FROM users 
 WHERE username LIKE '%test%' 
   AND create_time < DATE_SUB(NOW(), INTERVAL 1 MONTH);
 
--- 2. 删除空订单
+-- 2. Delete empty orders
 DELETE FROM orders 
 WHERE amount = 0 
-  AND order_status = 0 -- 未支付
+  AND order_status = 0 -- Unpaid
   AND create_time < DATE_SUB(NOW(), INTERVAL 7 DAY);
 
--- 3. 清理过期验证码
+-- 3. Clean up expired verification codes
 DELETE FROM verification_codes 
 WHERE create_time < DATE_SUB(NOW(), INTERVAL 24 HOUR);
 
--- 4. 优化表结构
+-- 4. Optimize table structures
 OPTIMIZE TABLE users;
 OPTIMIZE TABLE orders;
 OPTIMIZE TABLE verification_codes;
 
--- 5. 统计清理结果
+-- 5. View cleanup results
 SELECT 
   (SELECT COUNT(*) FROM users WHERE username LIKE '%test%') AS remaining_test_users,
   (SELECT COUNT(*) FROM orders WHERE amount = 0) AS remaining_empty_orders,
@@ -495,17 +592,27 @@ SELECT
 
                 // ========== 步骤1：100%复刻页面容器和样式 ==========
                 cloneEl.style.display = 'block';
-                // 完全复制DOM结构（包括已渲染的Markdown/代码高亮）
-                cloneEl.innerHTML = originalEl.innerHTML;
-                // 同步容器尺寸（和页面完全一致）
-                cloneEl.style.width = originalEl.offsetWidth + 'px';
+                // 清空克隆容器，避免残留
+                cloneEl.innerHTML = '';
+
+                // 深度克隆原始容器（包含所有子节点、类名、内联样式）
+                const clonedOriginal = originalEl.cloneNode(true);
+
+                // 将克隆的节点放入克隆容器
+                cloneEl.appendChild(clonedOriginal);
+
+                // 此时克隆容器内部结构与原始容器完全一致，但克隆容器本身可能还有多余的样式
+                // 调整克隆容器的尺寸为原始内容的实际宽高（scrollWidth/scrollHeight）
+                cloneEl.style.width = originalEl.scrollWidth + 'px';
                 cloneEl.style.height = originalEl.scrollHeight + 'px';
+                // 确保内容不被裁剪
+                cloneEl.style.overflow = 'visible';
                 // 强制重绘（确保样式生效）
                 await new Promise((resolve) => setTimeout(resolve, 1000));
 
                 // ========== 步骤2：精准渲染Canvas（无缩放偏差） ==========
                 const canvas = await html2canvas(cloneEl, {
-                  scale: 1, // 关键：禁用Canvas缩放，1:1渲染
+                  scale: 1.5, // 关键：禁用Canvas缩放，1:1渲染
                   useCORS: true,
                   backgroundColor: '#ffffff',
                   allowTaint: true,
@@ -532,8 +639,8 @@ SELECT
 
                 // 1:1绘制Canvas到PDF（无偏移）
                 pdf.addImage(
-                  canvas.toDataURL('image/png'),
-                  'PNG',
+                  canvas.toDataURL('image/jpeg', 0.9),
+                  'JPEG',
                   0, // X坐标：0，无偏移
                   0, // Y坐标：0，无偏移
                   originalEl.offsetWidth, // PDF宽度：和页面容器一致
